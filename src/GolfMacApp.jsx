@@ -456,12 +456,22 @@ const GolfMacApp = () => {
       recordingStartRef.current = Date.now();
       processFrame();
 
-      // Auto-stop after detecting shot (simulate)
-      setTimeout(() => {
-        if (ballTrailRef.current.length > 5) {
-          stopRecording();
+      // Make video fullscreen on iPhone
+      if (videoRef.current && isMobile) {
+        try {
+          if (videoRef.current.requestFullscreen) {
+            videoRef.current.requestFullscreen();
+          } else if (videoRef.current.webkitRequestFullscreen) {
+            videoRef.current.webkitRequestFullscreen();
+          } else if (videoRef.current.mozRequestFullScreen) {
+            videoRef.current.mozRequestFullScreen();
+          } else if (videoRef.current.msRequestFullscreen) {
+            videoRef.current.msRequestFullscreen();
+          }
+        } catch (err) {
+          console.log('Fullscreen not supported:', err);
         }
-      }, 5000);
+      }
     } else {
       stopRecording();
     }
@@ -470,6 +480,23 @@ const GolfMacApp = () => {
   const stopRecording = () => {
     setIsRecording(false);
     setIsProcessing(false);
+    
+    // Exit fullscreen if in fullscreen
+    if (document.fullscreenElement || document.webkitFullscreenElement) {
+      try {
+        if (document.exitFullscreen) {
+          document.exitFullscreen();
+        } else if (document.webkitExitFullscreen) {
+          document.webkitExitFullscreen();
+        } else if (document.mozCancelFullScreen) {
+          document.mozCancelFullScreen();
+        } else if (document.msExitFullscreen) {
+          document.msExitFullscreen();
+        }
+      } catch (err) {
+        console.log('Exit fullscreen error:', err);
+      }
+    }
     
     if (animationFrameRef.current) {
       cancelAnimationFrame(animationFrameRef.current);
@@ -572,17 +599,17 @@ const GolfMacApp = () => {
         </div>
       )}
 
-      <div className="relative w-full h-96 bg-black rounded-lg overflow-hidden">
+      <div className={`relative ${isRecording && isMobile ? 'fixed inset-0 z-50 bg-black' : 'w-full h-96'} bg-black rounded-lg overflow-hidden`}>
         <video
           ref={videoRef}
           autoPlay
           playsInline
           muted
-          className="w-full h-full object-cover"
+          className={`${isRecording && isMobile ? 'w-screen h-screen' : 'w-full h-full'} object-cover`}
         />
         <canvas
           ref={canvasRef}
-          className="absolute top-0 left-0 w-full h-full pointer-events-none"
+          className={`absolute top-0 left-0 ${isRecording && isMobile ? 'w-screen h-screen' : 'w-full h-full'} pointer-events-none`}
         />
         
         {isRecording && (
