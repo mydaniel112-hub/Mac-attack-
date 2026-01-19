@@ -194,6 +194,18 @@ const GolfMacApp = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab]);
 
+  // Ensure camera stream stays connected when recording starts
+  useEffect(() => {
+    if (isRecording && videoRef.current && streamRef.current) {
+      // Make sure video element has the stream
+      if (videoRef.current.srcObject !== streamRef.current) {
+        videoRef.current.srcObject = streamRef.current;
+      }
+      // Force video to play
+      videoRef.current.play().catch(err => console.log('Video play error:', err));
+    }
+  }, [isRecording]);
+
   // Optimized ball detection for mobile devices
   const detectBall = useCallback((currentFrame, previousFrame) => {
     if (!previousFrame) return null;
@@ -584,10 +596,17 @@ const GolfMacApp = () => {
             playsInline
             muted
             className="absolute inset-0 w-full h-full object-cover"
+            style={{ width: '100vw', height: '100vh', objectFit: 'cover' }}
+            onLoadedMetadata={() => {
+              if (videoRef.current) {
+                videoRef.current.play().catch(() => {});
+              }
+            }}
           />
           <canvas
             ref={canvasRef}
             className="absolute inset-0 w-full h-full pointer-events-none"
+            style={{ width: '100vw', height: '100vh' }}
           />
           
           <div className="absolute top-8 left-4 flex items-center gap-2 bg-red-500 text-white px-3 py-1 rounded-full animate-pulse z-50">
@@ -635,6 +654,7 @@ const GolfMacApp = () => {
             playsInline
             muted
             className="w-full h-full object-cover"
+            style={{ width: '100%', height: '100%', objectFit: 'cover' }}
           />
           <canvas
             ref={canvasRef}
