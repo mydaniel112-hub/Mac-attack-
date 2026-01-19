@@ -24,6 +24,10 @@ const GolfMacApp = () => {
   const recordingStartRef = useRef(null);
   const frameSkipCounterRef = useRef(0);
   const lastProcessTimeRef = useRef(0);
+  const [recordedBlob, setRecordedBlob] = useState(null);
+  const [showPlayback, setShowPlayback] = useState(false);
+  const mediaRecorderRef = useRef(null);
+  const recordedChunksRef = useRef([]);
 
   // Golf courses with hole information
   const courses = [
@@ -157,6 +161,15 @@ const GolfMacApp = () => {
 
   const startCamera = async () => {
     try {
+      // Don't restart if already running
+      if (streamRef.current) {
+        if (videoRef.current && videoRef.current.srcObject !== streamRef.current) {
+          videoRef.current.srcObject = streamRef.current;
+          videoRef.current.play().catch(() => {});
+        }
+        return;
+      }
+
       const cameraSettings = getOptimalCameraSettings();
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { 
@@ -165,9 +178,12 @@ const GolfMacApp = () => {
         },
         audio: false
       });
+      
+      streamRef.current = stream;
+      
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
-        streamRef.current = stream;
+        videoRef.current.play().catch(() => {});
       }
     } catch (err) {
       console.error('Camera access error:', err);
@@ -185,24 +201,35 @@ const GolfMacApp = () => {
   };
 
   useEffect(() => {
+    // ALWAYS keep camera on when on record tab - NEVER turn it off
     if (activeTab === 'record') {
       startCamera();
-    } else {
-      stopCamera();
     }
-    return () => stopCamera();
+    // Only cleanup when leaving record tab
+    return () => {
+      if (activeTab !== 'record') {
+        stopCamera();
+      }
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab]);
 
-  // Ensure camera stream stays connected when recording starts
+  // CRITICAL: Keep camera stream ALWAYS connected when recording
   useEffect(() => {
-    if (isRecording && videoRef.current && streamRef.current) {
-      // Make sure video element has the stream
-      if (videoRef.current.srcObject !== streamRef.current) {
-        videoRef.current.srcObject = streamRef.current;
-      }
-      // Force video to play
-      videoRef.current.play().catch(err => console.log('Video play error:', err));
+    if (isRecording && videoRef.current) {
+      // Continuously ensure stream is connected
+      const checkStream = setInterval(() => {
+        if (videoRef.current && streamRef.current) {
+          if (videoRef.current.srcObject !== streamRef.current) {
+            videoRef.current.srcObject = streamRef.current;
+          }
+          if (videoRef.current.paused) {
+            videoRef.current.play().catch(() => {});
+          }
+        }
+      }, 100);
+
+      return () => clearInterval(checkStream);
     }
   }, [isRecording]);
 
@@ -462,10 +489,49 @@ const GolfMacApp = () => {
 
   const toggleRecording = async () => {
     if (!isRecording) {
+      // Make absolutely sure camera is running
+      if (!streamRef.current) {
+        await startCamera();
+        // Wait a bit for camera to initialize
+        await new Promise(resolve => setTimeout(resolve, 200));
+      }
+
+      // Start MediaRecorder for playback
+      recordedChunksRef.current = [];
+      if (streamRef.current) {
+        try {
+          const mediaRecorder = new MediaRecorder(streamRef.current, {
+            mimeType: 'video/webm;codecs=vp9'
+          });
+          
+          mediaRecorder.ondataavailable = (event) => {
+            if (event.data.size > 0) {
+              recordedChunksRef.current.push(event.data);
+            }
+          };
+
+          mediaRecorder.onstop = () => {
+            const blob = new Blob(recordedChunksRef.current, { type: 'video/webm' });
+            setRecordedBlob(blob);
+          };
+
+          mediaRecorder.start();
+          mediaRecorderRef.current = mediaRecorder;
+        } catch (err) {
+          console.log('MediaRecorder not supported:', err);
+        }
+      }
+
       setIsRecording(true);
       setIsProcessing(true);
       ballTrailRef.current = [];
       recordingStartRef.current = Date.now();
+      
+      // Ensure video is playing
+      if (videoRef.current) {
+        videoRef.current.play().catch(() => {});
+      }
+      
       processFrame();
     } else {
       stopRecording();
@@ -475,6 +541,13 @@ const GolfMacApp = () => {
   const stopRecording = async () => {
     setIsRecording(false);
     setIsProcessing(false);
+    
+    // Stop MediaRecorder
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      mediaRecorderRef.current.stop();
+    }
+    
+    // DO NOT STOP CAMERA - Keep it running!
     
     // Exit fullscreen if in fullscreen
     if (document.fullscreenElement || document.webkitFullscreenElement || document.mozFullScreenElement) {
@@ -703,6 +776,30 @@ const GolfMacApp = () => {
         <div className="mt-4 text-center text-sm text-gray-600">
           Point camera at ball, press record, then hit your shot
         </div>
+
+      {/* Playback Video */}
+      {recordedBlob && (
+        <div className="mt-6 bg-black rounded-lg p-4">
+          <div className="flex justify-between items-center mb-3">
+            <h3 className="text-lg font-bold text-white">Recording Playback</h3>
+            <button
+              onClick={() => setShowPlayback(!showPlayback)}
+              className="bg-cyan-500 hover:bg-cyan-600 text-white px-4 py-2 rounded-lg text-sm font-semibold"
+            >
+              {showPlayback ? 'Hide' : 'Show'} Playback
+            </button>
+          </div>
+          {showPlayback && (
+            <video
+              src={URL.createObjectURL(recordedBlob)}
+              controls
+              autoPlay
+              className="w-full rounded-lg"
+              style={{ maxHeight: '400px' }}
+            />
+          )}
+        </div>
+      )}
 
       {shots.length > 0 && (
         <div className="mt-6">
