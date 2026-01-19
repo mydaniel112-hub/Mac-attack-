@@ -728,6 +728,7 @@ const GolfMacApp = () => {
       )}
     </div>
   );
+  };
 
   const GPSTab = () => {
     // Filter shots for this course (or show all)
