@@ -448,50 +448,35 @@ const GolfMacApp = () => {
     animationFrameRef.current = requestAnimationFrame(processFrame);
   }, [isRecording, isMobile, detectBall, traceColor, drawBallTrail]);
 
-  const toggleRecording = () => {
+  const toggleRecording = async () => {
     if (!isRecording) {
       setIsRecording(true);
       setIsProcessing(true);
       ballTrailRef.current = [];
       recordingStartRef.current = Date.now();
       processFrame();
-
-      // Make video fullscreen on iPhone
-      if (videoRef.current && isMobile) {
-        try {
-          if (videoRef.current.requestFullscreen) {
-            videoRef.current.requestFullscreen();
-          } else if (videoRef.current.webkitRequestFullscreen) {
-            videoRef.current.webkitRequestFullscreen();
-          } else if (videoRef.current.mozRequestFullScreen) {
-            videoRef.current.mozRequestFullScreen();
-          } else if (videoRef.current.msRequestFullscreen) {
-            videoRef.current.msRequestFullscreen();
-          }
-        } catch (err) {
-          console.log('Fullscreen not supported:', err);
-        }
-      }
     } else {
       stopRecording();
     }
   };
 
-  const stopRecording = () => {
+  const stopRecording = async () => {
     setIsRecording(false);
     setIsProcessing(false);
     
     // Exit fullscreen if in fullscreen
-    if (document.fullscreenElement || document.webkitFullscreenElement) {
+    if (document.fullscreenElement || document.webkitFullscreenElement || document.mozFullScreenElement) {
       try {
         if (document.exitFullscreen) {
-          document.exitFullscreen();
+          await document.exitFullscreen();
         } else if (document.webkitExitFullscreen) {
-          document.webkitExitFullscreen();
+          await document.webkitExitFullscreen();
+        } else if (document.webkitCancelFullScreen) {
+          await document.webkitCancelFullScreen();
         } else if (document.mozCancelFullScreen) {
-          document.mozCancelFullScreen();
+          await document.mozCancelFullScreen();
         } else if (document.msExitFullscreen) {
-          document.msExitFullscreen();
+          await document.msExitFullscreen();
         }
       } catch (err) {
         console.log('Exit fullscreen error:', err);
@@ -588,50 +573,94 @@ const GolfMacApp = () => {
     }
   };
 
-  const RecordTab = () => (
-    <div className="relative h-full">
-      {!modelLoaded && (
-        <div className="bg-yellow-50 border-2 border-yellow-200 rounded-lg p-3 mb-4 flex items-start gap-2">
-          <AlertCircle className="w-5 h-5 text-yellow-600 flex-shrink-0 mt-0.5" />
-          <div className="text-sm text-yellow-800">
-            Loading detection model...
+  const RecordTab = () => {
+    // When recording on mobile, hide everything else and show only camera
+    if (isRecording && isMobile) {
+      return (
+        <div className="fixed inset-0 w-screen h-screen bg-black z-[9999] m-0 p-0 overflow-hidden">
+          <video
+            ref={videoRef}
+            autoPlay
+            playsInline
+            muted
+            className="absolute inset-0 w-full h-full object-cover"
+          />
+          <canvas
+            ref={canvasRef}
+            className="absolute inset-0 w-full h-full pointer-events-none"
+          />
+          
+          <div className="absolute top-8 left-4 flex items-center gap-2 bg-red-500 text-white px-3 py-1 rounded-full animate-pulse z-50">
+            <div className="w-3 h-3 bg-white rounded-full"></div>
+            <span className="font-semibold">DETECTING BALL</span>
+          </div>
+
+          <div className="absolute top-8 right-4 bg-green-500 bg-opacity-90 text-white px-3 py-1 rounded-full text-xs font-semibold z-50">
+            TRACKING ACTIVE
+          </div>
+
+          <div className="absolute bottom-8 right-4 bg-black bg-opacity-60 text-white px-3 py-2 rounded-lg z-50">
+            <div className="text-xs opacity-80">Effect</div>
+            <div className="font-bold" style={{ color: traceColor }}>{traceEffect.toUpperCase()}</div>
+          </div>
+
+          <div className="absolute bottom-8 left-1/2 transform -translate-x-1/2 z-50">
+            <button
+              onClick={toggleRecording}
+              className="w-20 h-20 rounded-full flex items-center justify-center bg-red-500 animate-pulse shadow-lg"
+            >
+              <Square className="w-8 h-8 text-white" />
+            </button>
           </div>
         </div>
-      )}
+      );
+    }
 
-      <div className={`relative ${isRecording && isMobile ? 'fixed inset-0 z-50 bg-black' : 'w-full h-96'} bg-black rounded-lg overflow-hidden`}>
-        <video
-          ref={videoRef}
-          autoPlay
-          playsInline
-          muted
-          className={`${isRecording && isMobile ? 'w-screen h-screen' : 'w-full h-full'} object-cover`}
-        />
-        <canvas
-          ref={canvasRef}
-          className={`absolute top-0 left-0 ${isRecording && isMobile ? 'w-screen h-screen' : 'w-full h-full'} pointer-events-none`}
-        />
+    // Normal view when not recording
+    return (
+      <div className="relative h-full">
+        {!modelLoaded && (
+          <div className="bg-yellow-50 border-2 border-yellow-200 rounded-lg p-3 mb-4 flex items-start gap-2">
+            <AlertCircle className="w-5 h-5 text-yellow-600 flex-shrink-0 mt-0.5" />
+            <div className="text-sm text-yellow-800">
+              Loading detection model...
+            </div>
+          </div>
+        )}
+
+        <div className="relative w-full h-96 bg-black rounded-lg overflow-hidden">
+          <video
+            ref={videoRef}
+            autoPlay
+            playsInline
+            muted
+            className="w-full h-full object-cover"
+          />
+          <canvas
+            ref={canvasRef}
+            className="absolute top-0 left-0 w-full h-full pointer-events-none"
+          />
         
         {isRecording && (
-          <div className="absolute top-4 left-4 flex items-center gap-2 bg-red-500 text-white px-3 py-1 rounded-full animate-pulse">
+          <div className={`absolute ${isMobile ? 'top-8 left-4' : 'top-4 left-4'} flex items-center gap-2 bg-red-500 text-white px-3 py-1 rounded-full animate-pulse z-50`}>
             <div className="w-3 h-3 bg-white rounded-full"></div>
             <span className="font-semibold">DETECTING BALL</span>
           </div>
         )}
 
         {isProcessing && (
-          <div className="absolute top-4 right-4 bg-green-500 bg-opacity-90 text-white px-3 py-1 rounded-full text-xs font-semibold">
+          <div className={`absolute ${isMobile ? 'top-8 right-4' : 'top-4 right-4'} bg-green-500 bg-opacity-90 text-white px-3 py-1 rounded-full text-xs font-semibold z-50`}>
             TRACKING ACTIVE
           </div>
         )}
 
-        <div className="absolute bottom-4 right-4 bg-black bg-opacity-60 text-white px-3 py-2 rounded-lg">
+        <div className={`absolute ${isMobile ? 'bottom-20 right-4' : 'bottom-4 right-4'} bg-black bg-opacity-60 text-white px-3 py-2 rounded-lg z-50`}>
           <div className="text-xs opacity-80">Effect</div>
           <div className="font-bold" style={{ color: traceColor }}>{traceEffect.toUpperCase()}</div>
         </div>
       </div>
 
-      <div className="mt-6 flex justify-center gap-4 items-center">
+      <div className={`${isRecording && isMobile ? 'fixed bottom-8 left-1/2 transform -translate-x-1/2 z-50' : 'mt-6'} flex justify-center gap-4 items-center`}>
         <button
           onClick={toggleRecording}
           disabled={!modelLoaded}
@@ -651,9 +680,9 @@ const GolfMacApp = () => {
         </button>
       </div>
 
-      <div className="mt-4 text-center text-sm text-gray-600">
-        Point camera at ball, press record, then hit your shot
-      </div>
+        <div className="mt-4 text-center text-sm text-gray-600">
+          Point camera at ball, press record, then hit your shot
+        </div>
 
       {shots.length > 0 && (
         <div className="mt-6">
