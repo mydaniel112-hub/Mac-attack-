@@ -15,14 +15,8 @@ export default defineConfig({
     },
   },
   build: {
-    // Minify and optimize for production
-    minify: 'terser',
-    terserOptions: {
-      compress: {
-        drop_console: true, // Remove console.log in production
-        drop_debugger: true,
-      },
-    },
+    // Minify and optimize for production (using esbuild - built into Vite)
+    minify: 'esbuild',
     // Generate source maps for debugging (disable in production for security)
     sourcemap: false,
     rollupOptions: {
