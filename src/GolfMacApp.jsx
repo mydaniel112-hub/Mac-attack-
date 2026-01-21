@@ -214,41 +214,23 @@ const GolfMacApp = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab]);
 
-  // CRITICAL: Keep camera stream ALWAYS connected - NEVER let it disconnect
+  // CRITICAL: Keep camera stream ALWAYS connected - but DON'T cause re-renders/blinking
   useEffect(() => {
     if (isRecording && videoRef.current && streamRef.current) {
-      // Make sure stream is connected
+      // Set stream ONCE and leave it alone - NO intervals that cause blinking
       if (videoRef.current.srcObject !== streamRef.current) {
         videoRef.current.srcObject = streamRef.current;
+        videoRef.current.play().catch(() => {});
       }
       
-      // Keep video playing
-      const keepPlaying = () => {
-        if (videoRef.current && !videoRef.current.paused && streamRef.current) {
-          // Stream is good, do nothing
-          return;
-        }
-        if (videoRef.current && streamRef.current) {
-          videoRef.current.srcObject = streamRef.current;
-          videoRef.current.play().catch(() => {});
-        }
-      };
-      
-      // Check less frequently to avoid interrupting
-      const checkInterval = setInterval(keepPlaying, 500);
-      
-      // Also ensure stream tracks are NOT stopped
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach(track => {
-          if (track.readyState === 'ended') {
-            console.warn('Stream track ended!');
-          }
-          // Keep track alive
+      // Ensure tracks are enabled (do this once, not repeatedly)
+      streamRef.current.getTracks().forEach(track => {
+        if (!track.enabled) {
           track.enabled = true;
-        });
-      }
+        }
+      });
       
-      return () => clearInterval(checkInterval);
+      // That's it - no intervals, no constant checks, no blinking!
     }
   }, [isRecording]);
 
@@ -463,14 +445,16 @@ const GolfMacApp = () => {
     const canvas = canvasRef.current;
     const ctx = canvas.getContext('2d');
 
-    // CRITICAL: Ensure video is playing and has dimensions
-    if (!video.videoWidth || !video.videoHeight || video.paused) {
-      if (video.readyState >= 2 && streamRef.current) {
-        video.srcObject = streamRef.current;
-        video.play().catch(() => {});
-      }
+    // CRITICAL: Ensure video is ready - but don't keep resetting (prevents blinking)
+    if (!video.videoWidth || !video.videoHeight) {
+      // Video not ready yet - wait
       animationFrameRef.current = requestAnimationFrame(processFrame);
       return;
+    }
+    
+    // Make sure video is playing, but don't reset srcObject constantly (prevents blinking)
+    if (video.paused && streamRef.current && video.srcObject === streamRef.current) {
+      video.play().catch(() => {});
     }
 
     // Throttle processing slightly but keep it smooth
@@ -481,10 +465,13 @@ const GolfMacApp = () => {
     }
     lastProcessTimeRef.current = now;
 
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
+    // Only resize canvas if dimensions changed - prevents blinking
+    if (canvas.width !== video.videoWidth || canvas.height !== video.videoHeight) {
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+    }
 
-    // Draw current frame FIRST - always show video
+    // Draw current frame FIRST - always show video (no flickering)
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
     // Get image data for processing
@@ -743,8 +730,15 @@ const GolfMacApp = () => {
             muted
             className="absolute inset-0 w-full h-full object-cover"
             style={{ width: '100vw', height: '100vh', objectFit: 'cover' }}
-            onLoadedMetadata={() => {
-              if (videoRef.current) {
+            onLoadedMetadata={(e) => {
+              // Prevent multiple triggers
+              if (e.target && !e.target.played) {
+                e.target.play().catch(() => {});
+              }
+            }}
+            onPlay={() => {
+              // Ensure it stays playing
+              if (videoRef.current && videoRef.current.paused) {
                 videoRef.current.play().catch(() => {});
               }
             }}
@@ -801,6 +795,14 @@ const GolfMacApp = () => {
             muted
             className="w-full h-full object-cover"
             style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+            onLoadedMetadata={(e) => {
+              if (e.target && streamRef.current) {
+                if (e.target.srcObject !== streamRef.current) {
+                  e.target.srcObject = streamRef.current;
+                }
+                e.target.play().catch(() => {});
+              }
+            }}
           />
           <canvas
             ref={canvasRef}
