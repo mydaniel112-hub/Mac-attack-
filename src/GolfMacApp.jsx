@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { Camera, MapPin, Calendar, Settings, Play, Square, Zap, Waves, Droplets, Flame, AlertCircle, Target, TrendingUp, Sparkles, Navigation } from 'lucide-react';
+import { Camera, MapPin, Calendar, Settings, Play, Square, Zap, Waves, Droplets, Flame, AlertCircle, Target, TrendingUp, Navigation } from 'lucide-react';
 import { isMobileDevice, isIPhone, getOptimalCameraSettings, getOptimalBlockSize } from './utils/mobileOptimization';
 import { calculateDistance, recommendClub, calculateLandingPosition } from './utils/golfCalculations';
 
@@ -214,53 +214,70 @@ const GolfMacApp = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab]);
 
-  // CRITICAL: Keep camera stream ALWAYS connected when recording
+  // CRITICAL: Keep camera stream ALWAYS connected - NEVER let it disconnect
   useEffect(() => {
-    if (isRecording && videoRef.current) {
-      // Continuously ensure stream is connected
-      const checkStream = setInterval(() => {
-        if (videoRef.current && streamRef.current) {
-          if (videoRef.current.srcObject !== streamRef.current) {
-            videoRef.current.srcObject = streamRef.current;
-          }
-          if (videoRef.current.paused) {
-            videoRef.current.play().catch(() => {});
-          }
+    if (isRecording && videoRef.current && streamRef.current) {
+      // Make sure stream is connected
+      if (videoRef.current.srcObject !== streamRef.current) {
+        videoRef.current.srcObject = streamRef.current;
+      }
+      
+      // Keep video playing
+      const keepPlaying = () => {
+        if (videoRef.current && !videoRef.current.paused && streamRef.current) {
+          // Stream is good, do nothing
+          return;
         }
-      }, 100);
-
-      return () => clearInterval(checkStream);
+        if (videoRef.current && streamRef.current) {
+          videoRef.current.srcObject = streamRef.current;
+          videoRef.current.play().catch(() => {});
+        }
+      };
+      
+      // Check less frequently to avoid interrupting
+      const checkInterval = setInterval(keepPlaying, 500);
+      
+      // Also ensure stream tracks are NOT stopped
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach(track => {
+          if (track.readyState === 'ended') {
+            console.warn('Stream track ended!');
+          }
+          // Keep track alive
+          track.enabled = true;
+        });
+      }
+      
+      return () => clearInterval(checkInterval);
     }
   }, [isRecording]);
 
-  // Optimized ball detection for mobile devices
+  // IMPROVED ball detection - much more sensitive and reliable
   const detectBall = useCallback((currentFrame, previousFrame) => {
     if (!previousFrame) return null;
 
     const width = currentFrame.width;
     const height = currentFrame.height;
     
-    // Use larger blocks on mobile for better performance
-    const blockSize = getOptimalBlockSize(width, height);
-    const threshold = isMobile ? 25 : 30; // Slightly lower threshold for mobile
+    // Use smaller blocks for better detection accuracy
+    const blockSize = 15; // Smaller = more precise
+    const threshold = 15; // MUCH lower threshold - detect smaller motions
+    const brightnessThreshold = 100; // Lower brightness threshold for outdoor lighting
     
-    // Motion detection: compare frames (optimized for mobile)
+    // Motion detection: compare frames
     let maxMotion = 0;
     let ballPosition = null;
+    let candidatePositions = [];
     
-    // Optimize: skip every other block on mobile for speed
-    const skip = isMobile ? 1 : 0;
-    
-    for (let y = 0; y < height - blockSize; y += blockSize + skip) {
-      for (let x = 0; x < width - blockSize; x += blockSize + skip) {
+    // Scan every block - don't skip any for better detection
+    for (let y = 0; y < height - blockSize; y += blockSize) {
+      for (let x = 0; x < width - blockSize; x += blockSize) {
         let motion = 0;
         let sampleCount = 0;
         
-        // Sample fewer pixels on mobile (every other pixel)
-        const sampleRate = isMobile ? 2 : 1;
-        
-        for (let dy = 0; dy < blockSize; dy += sampleRate) {
-          for (let dx = 0; dx < blockSize; dx += sampleRate) {
+        // Sample more pixels for better accuracy
+        for (let dy = 0; dy < blockSize; dy += 2) {
+          for (let dx = 0; dx < blockSize; dx += 2) {
             if (y + dy >= height || x + dx >= width) continue;
             
             const idx = ((y + dy) * width + (x + dx)) * 4;
@@ -277,22 +294,50 @@ const GolfMacApp = () => {
         if (sampleCount > 0) {
           motion /= sampleCount;
 
-          // Look for white/light colored objects (golf balls are typically white)
-          const centerIdx = ((y + blockSize/2) * width + Math.floor(x + blockSize/2)) * 4;
-          if (centerIdx < currentFrame.data.length - 2) {
-            const brightness = (currentFrame.data[centerIdx] + currentFrame.data[centerIdx + 1] + currentFrame.data[centerIdx + 2]) / 3;
-            
-            if (motion > threshold && brightness > 180 && motion > maxMotion) {
-              maxMotion = motion;
-              ballPosition = { x: x + blockSize/2, y: y + blockSize/2, motion };
+          // Check for motion - don't require brightness to be high (works in all lighting)
+          if (motion > threshold) {
+            const centerIdx = ((y + blockSize/2) * width + Math.floor(x + blockSize/2)) * 4;
+            if (centerIdx < currentFrame.data.length - 2) {
+              const r = currentFrame.data[centerIdx];
+              const g = currentFrame.data[centerIdx + 1];
+              const b = currentFrame.data[centerIdx + 2];
+              const brightness = (r + g + b) / 3;
+              
+              // More lenient detection - look for ANY moving object, not just white ones
+              // Golf balls can be various colors, and motion is the key indicator
+              if (motion > maxMotion) {
+                maxMotion = motion;
+                ballPosition = { x: x + blockSize/2, y: y + blockSize/2, motion };
+              }
+              
+              // Also collect candidates with high motion
+              if (motion > threshold * 1.5) {
+                candidatePositions.push({ x: x + blockSize/2, y: y + blockSize/2, motion });
+              }
             }
           }
         }
       }
     }
 
-    return maxMotion > threshold * detectionSensitivity ? ballPosition : null;
-  }, [isMobile, detectionSensitivity]);
+    // Use sensitivity multiplier - lower means MORE sensitive
+    const effectiveThreshold = threshold * (2 - detectionSensitivity);
+    
+    // Return the position if motion is strong enough
+    if (maxMotion > effectiveThreshold) {
+      return ballPosition;
+    }
+    
+    // If no strong candidate, try the best from candidates list
+    if (candidatePositions.length > 0) {
+      candidatePositions.sort((a, b) => b.motion - a.motion);
+      if (candidatePositions[0].motion > threshold * 0.8) {
+        return candidatePositions[0];
+      }
+    }
+    
+    return null;
+  }, [detectionSensitivity]);
 
   const drawBallTrail = useCallback((ctx, trail) => {
     if (trail.length < 2) return;
@@ -409,24 +454,28 @@ const GolfMacApp = () => {
   }, [traceEffect, traceColor]);
 
   const processFrame = useCallback(() => {
-    if (!videoRef.current || !canvasRef.current || !isRecording) return;
+    if (!videoRef.current || !canvasRef.current || !isRecording) {
+      animationFrameRef.current = requestAnimationFrame(processFrame);
+      return;
+    }
 
     const video = videoRef.current;
     const canvas = canvasRef.current;
     const ctx = canvas.getContext('2d');
 
-    // Skip frames on mobile for better performance (process every other frame)
-    if (isMobile) {
-      frameSkipCounterRef.current++;
-      if (frameSkipCounterRef.current % 2 !== 0) {
-        animationFrameRef.current = requestAnimationFrame(processFrame);
-        return;
+    // CRITICAL: Ensure video is playing and has dimensions
+    if (!video.videoWidth || !video.videoHeight || video.paused) {
+      if (video.readyState >= 2 && streamRef.current) {
+        video.srcObject = streamRef.current;
+        video.play().catch(() => {});
       }
+      animationFrameRef.current = requestAnimationFrame(processFrame);
+      return;
     }
 
-    // Throttle processing to max 30 FPS on mobile
+    // Throttle processing slightly but keep it smooth
     const now = performance.now();
-    if (isMobile && now - lastProcessTimeRef.current < 33) {
+    if (isMobile && now - lastProcessTimeRef.current < 50) {
       animationFrameRef.current = requestAnimationFrame(processFrame);
       return;
     }
@@ -435,15 +484,14 @@ const GolfMacApp = () => {
     canvas.width = video.videoWidth;
     canvas.height = video.videoHeight;
 
-    // Draw current frame
+    // Draw current frame FIRST - always show video
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
-    // Only get image data if we have a previous frame (optimization)
-    if (previousFrameRef.current) {
-      // Get image data for processing
-      const currentFrame = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    // Get image data for processing
+    const currentFrame = ctx.getImageData(0, 0, canvas.width, canvas.height);
 
-      // Detect ball
+    // Detect ball if we have previous frame
+    if (previousFrameRef.current) {
       const ballPos = detectBall(currentFrame, previousFrameRef.current);
 
       if (ballPos) {
@@ -453,36 +501,32 @@ const GolfMacApp = () => {
           timestamp: Date.now()
         });
 
-        // Keep only recent trail points (last 2 seconds)
-        const now = Date.now();
-        ballTrailRef.current = ballTrailRef.current.filter(p => now - p.timestamp < 2000);
+        // Keep only recent trail points (last 3 seconds for longer trail)
+        const trailNow = Date.now();
+        ballTrailRef.current = ballTrailRef.current.filter(p => trailNow - p.timestamp < 3000);
 
         // Draw ball trail with effects
         drawBallTrail(ctx, ballTrailRef.current);
 
-        // Draw ball indicator (simplified on mobile)
+        // Draw ball indicator - make it more visible
         ctx.beginPath();
-        ctx.arc(ballPos.x, ballPos.y, isMobile ? 12 : 15, 0, Math.PI * 2);
+        ctx.arc(ballPos.x, ballPos.y, 18, 0, Math.PI * 2);
         ctx.strokeStyle = traceColor;
-        ctx.lineWidth = isMobile ? 2 : 3;
+        ctx.lineWidth = 4;
         ctx.stroke();
         
-        if (!isMobile) {
-          ctx.beginPath();
-          ctx.arc(ballPos.x, ballPos.y, 20, 0, Math.PI * 2);
-          ctx.strokeStyle = traceColor;
-          ctx.lineWidth = 1;
-          ctx.globalAlpha = 0.5;
-          ctx.stroke();
-          ctx.globalAlpha = 1;
-        }
+        // Inner circle for better visibility
+        ctx.beginPath();
+        ctx.arc(ballPos.x, ballPos.y, 8, 0, Math.PI * 2);
+        ctx.fillStyle = traceColor;
+        ctx.globalAlpha = 0.6;
+        ctx.fill();
+        ctx.globalAlpha = 1;
       }
-
-      previousFrameRef.current = currentFrame;
-    } else {
-      // First frame - just store it
-      previousFrameRef.current = ctx.getImageData(0, 0, canvas.width, canvas.height);
     }
+
+    // Always update previous frame
+    previousFrameRef.current = currentFrame;
 
     animationFrameRef.current = requestAnimationFrame(processFrame);
   }, [isRecording, isMobile, detectBall, traceColor, drawBallTrail]);
@@ -496,29 +540,50 @@ const GolfMacApp = () => {
         await new Promise(resolve => setTimeout(resolve, 200));
       }
 
-      // Start MediaRecorder for playback
+      // Start MediaRecorder for playback - use iPhone compatible format
       recordedChunksRef.current = [];
       if (streamRef.current) {
         try {
+          // Try different MIME types for iPhone compatibility
+          let mimeType = 'video/webm';
+          if (MediaRecorder.isTypeSupported('video/webm;codecs=vp9')) {
+            mimeType = 'video/webm;codecs=vp9';
+          } else if (MediaRecorder.isTypeSupported('video/webm;codecs=vp8')) {
+            mimeType = 'video/webm;codecs=vp8';
+          } else if (MediaRecorder.isTypeSupported('video/mp4')) {
+            mimeType = 'video/mp4';
+          }
+          
           const mediaRecorder = new MediaRecorder(streamRef.current, {
-            mimeType: 'video/webm;codecs=vp9'
+            mimeType: mimeType,
+            videoBitsPerSecond: 2500000 // Lower bitrate for smoother recording
           });
           
+          // Record data every second for smoother playback
           mediaRecorder.ondataavailable = (event) => {
-            if (event.data.size > 0) {
+            if (event.data && event.data.size > 0) {
               recordedChunksRef.current.push(event.data);
             }
           };
 
           mediaRecorder.onstop = () => {
-            const blob = new Blob(recordedChunksRef.current, { type: 'video/webm' });
-            setRecordedBlob(blob);
+            if (recordedChunksRef.current.length > 0) {
+              const blobType = mimeType.includes('mp4') ? 'video/mp4' : 'video/webm';
+              const blob = new Blob(recordedChunksRef.current, { type: blobType });
+              setRecordedBlob(blob);
+            }
           };
 
-          mediaRecorder.start();
+          mediaRecorder.onerror = (event) => {
+            console.error('MediaRecorder error:', event.error);
+          };
+
+          // Start recording with timeslice for smoother playback
+          mediaRecorder.start(1000); // Get data every second
           mediaRecorderRef.current = mediaRecorder;
         } catch (err) {
-          console.log('MediaRecorder not supported:', err);
+          console.log('MediaRecorder error:', err);
+          // If recording fails, just continue without recording
         }
       }
 
@@ -542,31 +607,39 @@ const GolfMacApp = () => {
     setIsRecording(false);
     setIsProcessing(false);
     
-    // Stop MediaRecorder
+    // Stop MediaRecorder and wait for blob
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-      mediaRecorderRef.current.stop();
+      try {
+        mediaRecorderRef.current.stop();
+        // Wait for blob to be created
+        await new Promise(resolve => setTimeout(resolve, 500));
+      } catch (err) {
+        console.error('Error stopping MediaRecorder:', err);
+      }
     }
     
     // DO NOT STOP CAMERA - Keep it running!
     
-    // Exit fullscreen if in fullscreen
-    if (document.fullscreenElement || document.webkitFullscreenElement || document.mozFullScreenElement) {
-      try {
-        if (document.exitFullscreen) {
-          await document.exitFullscreen();
-        } else if (document.webkitExitFullscreen) {
-          await document.webkitExitFullscreen();
-        } else if (document.webkitCancelFullScreen) {
-          await document.webkitCancelFullScreen();
-        } else if (document.mozCancelFullScreen) {
-          await document.mozCancelFullScreen();
-        } else if (document.msExitFullscreen) {
-          await document.msExitFullscreen();
+    // Exit fullscreen AFTER a delay to prevent glitches
+    setTimeout(async () => {
+      if (document.fullscreenElement || document.webkitFullscreenElement || document.mozFullScreenElement) {
+        try {
+          if (document.exitFullscreen) {
+            await document.exitFullscreen();
+          } else if (document.webkitExitFullscreen) {
+            await document.webkitExitFullscreen();
+          } else if (document.webkitCancelFullScreen) {
+            await document.webkitCancelFullScreen();
+          } else if (document.mozCancelFullScreen) {
+            await document.mozCancelFullScreen();
+          } else if (document.msExitFullscreen) {
+            await document.msExitFullscreen();
+          }
+        } catch (err) {
+          console.log('Exit fullscreen error:', err);
         }
-      } catch (err) {
-        console.log('Exit fullscreen error:', err);
       }
-    }
+    }, 400); // Delay to prevent screen glitches
     
     if (animationFrameRef.current) {
       cancelAnimationFrame(animationFrameRef.current);
@@ -777,26 +850,40 @@ const GolfMacApp = () => {
           Point camera at ball, press record, then hit your shot
         </div>
 
-      {/* Playback Video */}
-      {recordedBlob && (
-        <div className="mt-6 bg-black rounded-lg p-4">
+      {/* Playback Video - Only show when NOT recording to prevent glitches */}
+      {recordedBlob && !isRecording && (
+        <div className="mt-6 bg-gradient-to-br from-gray-800 to-black rounded-lg p-4 shadow-xl">
           <div className="flex justify-between items-center mb-3">
-            <h3 className="text-lg font-bold text-white">Recording Playback</h3>
+            <h3 className="text-lg font-bold text-white flex items-center gap-2">
+              <Play className="w-5 h-5" />
+              Recording Playback
+            </h3>
             <button
-              onClick={() => setShowPlayback(!showPlayback)}
-              className="bg-cyan-500 hover:bg-cyan-600 text-white px-4 py-2 rounded-lg text-sm font-semibold"
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                setShowPlayback(!showPlayback);
+              }}
+              className="bg-cyan-500 hover:bg-cyan-600 active:bg-cyan-700 text-white px-4 py-2 rounded-lg text-sm font-semibold transition-colors"
             >
               {showPlayback ? 'Hide' : 'Show'} Playback
             </button>
           </div>
           {showPlayback && (
-            <video
-              src={URL.createObjectURL(recordedBlob)}
-              controls
-              autoPlay
-              className="w-full rounded-lg"
-              style={{ maxHeight: '400px' }}
-            />
+            <div className="relative bg-black rounded-lg overflow-hidden">
+              <video
+                key={recordedBlob.size}
+                src={URL.createObjectURL(recordedBlob)}
+                controls
+                playsInline
+                preload="metadata"
+                className="w-full rounded-lg"
+                style={{ maxHeight: '500px', display: 'block' }}
+                onError={(e) => {
+                  console.error('Playback video error:', e);
+                }}
+              />
+            </div>
           )}
         </div>
       )}
@@ -895,7 +982,7 @@ const GolfMacApp = () => {
         {/* Distance to Hole and Club Recommendation */}
         {distanceToHoleFromPosition && (
           <div className="mb-4 grid grid-cols-2 gap-3">
-            <div className="bg-gradient-to-r from-cyan-400 to-blue-500 text-white rounded-lg p-4">
+            <div className="bg-gradient-to-r from-orange-400 to-red-500 text-black rounded-lg p-4 shadow-lg">
               <div className="text-xs font-semibold opacity-90 mb-1">Distance to Hole</div>
               <div className="text-2xl font-bold">{distanceToHoleFromPosition} yds</div>
               {currentHoleData && (
@@ -905,7 +992,7 @@ const GolfMacApp = () => {
               )}
             </div>
             {recommendedClubForHole && (
-              <div className="bg-gradient-to-r from-green-400 to-emerald-500 text-white rounded-lg p-4">
+              <div className="bg-gradient-to-r from-pink-500 to-cyan-500 text-black rounded-lg p-4 shadow-lg">
                 <div className="text-xs font-semibold opacity-90 mb-1">Recommended Club</div>
                 <div className="text-2xl font-bold">{recommendedClubForHole}</div>
                 <div className="text-xs mt-1 opacity-80">For this distance</div>
@@ -1082,7 +1169,7 @@ const GolfMacApp = () => {
     
     return (
       <div>
-        <div className="bg-gradient-to-r from-green-400 to-cyan-400 rounded-lg p-6 mb-6 text-white">
+        <div className="bg-gradient-to-r from-orange-500 via-red-500 to-pink-500 rounded-lg p-6 mb-6 text-black shadow-xl">
           <div className="text-center">
             <div className="text-5xl font-bold mb-2">{golfStreak}</div>
             <div className="text-lg opacity-90">Day Streak 🔥</div>
@@ -1091,12 +1178,12 @@ const GolfMacApp = () => {
 
         <button
           onClick={updateStreak}
-          className="w-full bg-gradient-to-r from-green-500 to-cyan-500 hover:from-green-600 hover:to-cyan-600 text-white font-semibold py-3 rounded-lg mb-6 transition-colors"
+          className="w-full bg-gradient-to-r from-orange-500 to-red-500 hover:from-orange-600 hover:to-red-600 text-black font-bold py-3 rounded-lg mb-6 transition-all shadow-lg"
         >
           Mark Today as Golfed ✓
         </button>
 
-        <div className="bg-white rounded-lg p-4 shadow-md">
+        <div className="bg-gradient-to-br from-orange-50 to-pink-50 rounded-lg p-4 shadow-lg border-2 border-orange-200">
           <div className="text-center font-bold text-gray-800 mb-4">
             {today.toLocaleString('default', { month: 'long', year: 'numeric' })}
           </div>
@@ -1119,10 +1206,10 @@ const GolfMacApp = () => {
                   key={day}
                   className={`aspect-square flex items-center justify-center rounded-lg text-sm font-medium ${
                     isToday
-                      ? 'bg-gradient-to-br from-green-400 to-cyan-400 text-white ring-2 ring-green-300 ring-offset-2'
+                      ? 'bg-gradient-to-br from-orange-500 via-red-500 to-pink-500 text-black ring-2 ring-orange-300 ring-offset-2 font-bold'
                       : isGolfDay
-                      ? 'bg-green-200 text-green-800'
-                      : 'text-gray-600'
+                      ? 'bg-gradient-to-br from-orange-300 to-pink-300 text-orange-900 font-semibold'
+                      : 'text-gray-700'
                   }`}
                 >
                   {day}
@@ -1240,17 +1327,20 @@ const GolfMacApp = () => {
         <div className="text-center mb-6 pt-4 relative">
           {/* Animated background elements */}
           <div className="absolute inset-0 overflow-hidden pointer-events-none">
-            <div className="absolute top-0 left-1/4 w-64 h-64 bg-gradient-to-r from-green-400 to-emerald-400 rounded-full opacity-20 blur-3xl animate-pulse"></div>
-            <div className="absolute top-0 right-1/4 w-64 h-64 bg-gradient-to-r from-cyan-400 to-teal-400 rounded-full opacity-20 blur-3xl animate-pulse" style={{ animationDelay: '1s' }}></div>
+            <div className="absolute top-0 left-1/4 w-64 h-64 bg-gradient-to-r from-orange-400 to-red-400 rounded-full opacity-30 blur-3xl animate-pulse"></div>
+            <div className="absolute top-0 right-1/4 w-64 h-64 bg-gradient-to-r from-pink-400 to-cyan-400 rounded-full opacity-30 blur-3xl animate-pulse" style={{ animationDelay: '1s' }}></div>
           </div>
           
           <div className="relative z-10">
-            <div className="flex items-center justify-center gap-3 mb-3">
-              <Sparkles className="w-8 h-8 text-green-500 animate-pulse" />
-              <h1 className="text-5xl font-black bg-gradient-to-r from-green-500 via-emerald-500 to-cyan-500 bg-clip-text text-transparent mb-2 tracking-tight">
+            <div className="flex flex-col items-center mb-3">
+              <h1 className="text-6xl font-black bg-gradient-to-r from-orange-500 via-red-500 via-pink-500 to-cyan-500 bg-clip-text text-transparent mb-2 tracking-tight animate-pulse">
                 GOLF MAC
               </h1>
-              <Sparkles className="w-8 h-8 text-cyan-500 animate-pulse" style={{ animationDelay: '0.5s' }} />
+              <div className="flex items-center gap-3 mt-2">
+                <Target className="w-6 h-6 text-orange-500 animate-bounce" />
+                <Navigation className="w-6 h-6 text-red-500 animate-bounce" style={{ animationDelay: '0.2s' }} />
+                <Flame className="w-6 h-6 text-cyan-500 animate-bounce" style={{ animationDelay: '0.4s' }} />
+              </div>
             </div>
             <div className="flex items-center justify-center gap-2">
               <Target className="w-5 h-5 text-orange-500" />
@@ -1258,7 +1348,7 @@ const GolfMacApp = () => {
               <TrendingUp className="w-5 h-5 text-red-500" />
             </div>
             {shots.length > 0 && (
-              <div className="mt-4 inline-flex items-center gap-2 bg-gradient-to-r from-green-400 to-cyan-400 text-white px-4 py-2 rounded-full shadow-lg">
+              <div className="mt-4 inline-flex items-center gap-2 bg-gradient-to-r from-orange-500 via-red-500 to-pink-500 text-black px-4 py-2 rounded-full shadow-xl">
                 <Target className="w-4 h-4" />
                 <span className="font-bold text-sm">{shots.length} Shot{shots.length !== 1 ? 's' : ''} Tracked</span>
               </div>
@@ -1267,7 +1357,7 @@ const GolfMacApp = () => {
         </div>
 
         {/* Navigation */}
-        <div className="bg-white rounded-xl shadow-lg p-2 mb-6 flex gap-2">
+        <div className="bg-gradient-to-r from-orange-100 via-pink-100 to-cyan-100 rounded-xl shadow-xl p-2 mb-6 flex gap-2 border-2 border-orange-200">
           {[
             { id: 'record', icon: Camera, label: 'Record' },
             { id: 'gps', icon: MapPin, label: 'GPS' },
@@ -1281,8 +1371,8 @@ const GolfMacApp = () => {
                 onClick={() => setActiveTab(tab.id)}
                 className={`flex-1 flex flex-col items-center gap-1 py-3 rounded-lg transition-all ${
                   activeTab === tab.id
-                    ? 'bg-gradient-to-r from-green-400 to-cyan-400 text-white'
-                    : 'text-gray-600 hover:bg-gray-100'
+                    ? 'bg-gradient-to-r from-orange-500 via-red-500 to-cyan-500 text-black font-bold'
+                    : 'text-gray-700 hover:bg-gradient-to-r hover:from-orange-200 hover:to-pink-200'
                 }`}
               >
                 <Icon className="w-6 h-6" />
@@ -1293,7 +1383,7 @@ const GolfMacApp = () => {
         </div>
 
         {/* Content */}
-        <div className="bg-white rounded-xl shadow-lg p-6">
+        <div className="bg-gradient-to-br from-orange-50 via-pink-50 to-cyan-50 rounded-xl shadow-2xl p-6 border-2 border-orange-200">
           {activeTab === 'record' && <RecordTab />}
           {activeTab === 'gps' && <GPSTab />}
           {activeTab === 'calendar' && <CalendarTab />}
