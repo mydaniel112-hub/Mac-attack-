@@ -25,25 +25,37 @@ export const isIPhone = () => {
 
 /**
  * Get optimal camera resolution for device
- * Returns lower resolution for mobile to improve performance
+ * iPhone gets HIGH quality for crystal clear recording
  */
 export const getOptimalCameraSettings = () => {
-  const isMobile = isMobileDevice();
+  const isIPhoneDevice = isIPhone();
   
-  if (isMobile) {
-    // Lower resolution for mobile (better performance, less battery drain)
+  if (isIPhoneDevice) {
+    // iPhone gets MAXIMUM quality - crystal clear recording
     return {
-      width: { ideal: 640, max: 1280 },
-      height: { ideal: 480, max: 720 },
-      frameRate: { ideal: 30, max: 30 } // Lower frame rate for mobile
+      facingMode: 'environment',
+      width: { ideal: 1920, min: 1280 },
+      height: { ideal: 1080, min: 720 },
+      frameRate: { ideal: 60, min: 30 } // High frame rate for smooth recording
     };
   }
   
-  // Higher resolution for desktop
+  const isMobile = isMobileDevice();
+  if (isMobile) {
+    // Other mobile devices get good quality
+    return {
+      facingMode: 'environment',
+      width: { ideal: 1280, min: 640 },
+      height: { ideal: 720, min: 480 },
+      frameRate: { ideal: 30, min: 24 }
+    };
+  }
+  
+  // Desktop gets maximum quality
   return {
-    width: { ideal: 1920, max: 1920 },
-    height: { ideal: 1080, max: 1080 },
-    frameRate: { ideal: 60, max: 60 }
+    width: { ideal: 1920, min: 1280 },
+    height: { ideal: 1080, min: 720 },
+    frameRate: { ideal: 60, min: 30 }
   };
 };
 

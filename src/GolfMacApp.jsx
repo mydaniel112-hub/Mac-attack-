@@ -161,28 +161,51 @@ const GolfMacApp = () => {
 
   const startCamera = async () => {
     try {
-      // Don't restart if already running
+      // Don't restart if already running and tracks are active
       if (streamRef.current) {
-        if (videoRef.current && videoRef.current.srcObject !== streamRef.current) {
-          videoRef.current.srcObject = streamRef.current;
-          videoRef.current.play().catch(() => {});
+        const tracks = streamRef.current.getTracks();
+        const activeTracks = tracks.filter(t => t.readyState === 'live');
+        
+        if (activeTracks.length > 0) {
+          // Stream is active - just reconnect to video element
+          if (videoRef.current && videoRef.current.srcObject !== streamRef.current) {
+            videoRef.current.srcObject = streamRef.current;
+            videoRef.current.play().catch(() => {});
+          }
+          return;
         }
-        return;
+        // If tracks are dead, we need to restart
+        streamRef.current.getTracks().forEach(track => track.stop());
+        streamRef.current = null;
       }
 
       const cameraSettings = getOptimalCameraSettings();
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { 
-          facingMode: 'environment',
-          ...cameraSettings
-        },
+        video: cameraSettings,
         audio: false
+      });
+      
+      // CRITICAL: Keep stream alive - never let it stop
+      stream.getTracks().forEach(track => {
+        track.onended = () => {
+          console.warn('Camera track ended unexpectedly!');
+          // Try to restart if we're still recording
+          if (isRecording) {
+            startCamera();
+          }
+        };
       });
       
       streamRef.current = stream;
       
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
+        // Wait for metadata before playing
+        videoRef.current.onloadedmetadata = () => {
+          if (videoRef.current) {
+            videoRef.current.play().catch(() => {});
+          }
+        };
         videoRef.current.play().catch(() => {});
       }
     } catch (err) {
@@ -214,23 +237,52 @@ const GolfMacApp = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab]);
 
-  // CRITICAL: Keep camera stream ALWAYS connected - but DON'T cause re-renders/blinking
+  // CRITICAL: Keep camera stream ALWAYS connected and playing during recording
   useEffect(() => {
     if (isRecording && videoRef.current && streamRef.current) {
-      // Set stream ONCE and leave it alone - NO intervals that cause blinking
+      // Ensure stream is connected
       if (videoRef.current.srcObject !== streamRef.current) {
         videoRef.current.srcObject = streamRef.current;
-        videoRef.current.play().catch(() => {});
       }
       
-      // Ensure tracks are enabled (do this once, not repeatedly)
-      streamRef.current.getTracks().forEach(track => {
-        if (!track.enabled) {
-          track.enabled = true;
+      // Keep video playing - check if paused and restart if needed
+      const ensurePlaying = () => {
+        if (videoRef.current && streamRef.current) {
+          // Check if stream is still active
+          const tracks = streamRef.current.getTracks();
+          const activeTracks = tracks.filter(t => t.readyState === 'live');
+          
+          if (activeTracks.length === 0) {
+            // Stream died - restart camera
+            console.warn('Stream died during recording - restarting');
+            startCamera();
+            return;
+          }
+          
+          // Ensure video is playing
+          if (videoRef.current.paused || videoRef.current.ended) {
+            videoRef.current.srcObject = streamRef.current;
+            videoRef.current.play().catch(() => {});
+          }
+          
+          // Ensure tracks are enabled
+          tracks.forEach(track => {
+            if (!track.enabled) {
+              track.enabled = true;
+            }
+          });
         }
-      });
+      };
       
-      // That's it - no intervals, no constant checks, no blinking!
+      // Check every 2 seconds (not too frequent to avoid blinking)
+      const checkInterval = setInterval(ensurePlaying, 2000);
+      
+      // Initial check
+      ensurePlaying();
+      
+      return () => {
+        clearInterval(checkInterval);
+      };
     }
   }, [isRecording]);
 
@@ -445,16 +497,40 @@ const GolfMacApp = () => {
     const canvas = canvasRef.current;
     const ctx = canvas.getContext('2d');
 
-    // CRITICAL: Ensure video is ready - but don't keep resetting (prevents blinking)
+    // CRITICAL: Check if stream is still alive - prevent black screen
+    if (streamRef.current) {
+      const tracks = streamRef.current.getTracks();
+      const activeTracks = tracks.filter(t => t.readyState === 'live');
+      
+      if (activeTracks.length === 0) {
+        // Stream died - restart camera immediately
+        console.warn('Stream died in processFrame - restarting');
+        startCamera().then(() => {
+          animationFrameRef.current = requestAnimationFrame(processFrame);
+        });
+        return;
+      }
+    }
+    
+    // CRITICAL: Ensure video is ready and playing - prevent black screen
     if (!video.videoWidth || !video.videoHeight) {
-      // Video not ready yet - wait
+      // Video not ready yet - ensure stream is connected
+      if (streamRef.current && video.srcObject !== streamRef.current) {
+        video.srcObject = streamRef.current;
+        video.play().catch(() => {});
+      }
       animationFrameRef.current = requestAnimationFrame(processFrame);
       return;
     }
     
-    // Make sure video is playing, but don't reset srcObject constantly (prevents blinking)
-    if (video.paused && streamRef.current && video.srcObject === streamRef.current) {
-      video.play().catch(() => {});
+    // Make sure video is playing - prevent black screen
+    if (video.paused || video.ended) {
+      if (streamRef.current) {
+        video.srcObject = streamRef.current;
+        video.play().catch(() => {});
+      }
+      animationFrameRef.current = requestAnimationFrame(processFrame);
+      return;
     }
 
     // Throttle processing slightly but keep it smooth
@@ -543,7 +619,7 @@ const GolfMacApp = () => {
           
           const mediaRecorder = new MediaRecorder(streamRef.current, {
             mimeType: mimeType,
-            videoBitsPerSecond: 2500000 // Lower bitrate for smoother recording
+            videoBitsPerSecond: 8000000 // HIGH bitrate for crystal clear iPhone quality
           });
           
           // Record data every second for smoother playback
