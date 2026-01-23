@@ -14,12 +14,16 @@ const GolfMacApp = () => {
   const [modelLoaded, setModelLoaded] = useState(false);
   const [detectionSensitivity, setDetectionSensitivity] = useState(0.7);
   const [isMobile, setIsMobile] = useState(false);
+  const [ballLockedIn, setBallLockedIn] = useState(false);
+  const [preDetectionMode, setPreDetectionMode] = useState(false);
+  const [lockedBallPosition, setLockedBallPosition] = useState(null);
   
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
   const streamRef = useRef(null);
   const animationFrameRef = useRef(null);
   const previousFrameRef = useRef(null);
+  const baselineFrameRef = useRef(null);
   const ballTrailRef = useRef([]);
   const recordingStartRef = useRef(null);
   const frameSkipCounterRef = useRef(0);
@@ -28,6 +32,7 @@ const GolfMacApp = () => {
   const [showPlayback, setShowPlayback] = useState(false);
   const mediaRecorderRef = useRef(null);
   const recordedChunksRef = useRef([]);
+  const smoothedTrailRef = useRef([]);
 
   // Golf courses with hole information
   const courses = [
@@ -286,36 +291,115 @@ const GolfMacApp = () => {
     }
   }, [isRecording]);
 
-  // IMPROVED ball detection - much more sensitive and reliable
-  const detectBall = useCallback((currentFrame, previousFrame) => {
+  // Detect stationary white/light colored objects (golf balls on tee)
+  const detectStationaryBall = useCallback((frame) => {
+    if (!frame) return null;
+
+    const width = frame.width;
+    const height = frame.height;
+    const blockSize = 12; // Smaller blocks for precise detection
+    
+    let bestCandidate = null;
+    let maxScore = 0;
+    
+    // Look for white/light colored circular objects
+    for (let y = blockSize; y < height - blockSize; y += blockSize) {
+      for (let x = blockSize; x < width - blockSize; x += blockSize) {
+        let brightnessSum = 0;
+        let pixelCount = 0;
+        let whitePixelCount = 0;
+        
+        // Sample a circular area (golf ball is roughly circular)
+        for (let dy = -blockSize; dy <= blockSize; dy++) {
+          for (let dx = -blockSize; dx <= blockSize; dx++) {
+            const dist = Math.sqrt(dx * dx + dy * dy);
+            if (dist > blockSize) continue;
+            
+            const py = y + dy;
+            const px = x + dx;
+            if (py < 0 || py >= height || px < 0 || px >= width) continue;
+            
+            const idx = (py * width + px) * 4;
+            const r = frame.data[idx];
+            const g = frame.data[idx + 1];
+            const b = frame.data[idx + 2];
+            const brightness = (r + g + b) / 3;
+            
+            brightnessSum += brightness;
+            pixelCount++;
+            
+            // Count pixels that are white/light (golf ball color)
+            if (brightness > 180 && Math.abs(r - g) < 30 && Math.abs(g - b) < 30) {
+              whitePixelCount++;
+            }
+          }
+        }
+        
+        if (pixelCount > 0) {
+          const avgBrightness = brightnessSum / pixelCount;
+          const whiteRatio = whitePixelCount / pixelCount;
+          
+          // Score based on brightness and whiteness
+          // Golf balls are typically bright white/light colored
+          const score = avgBrightness * 0.6 + whiteRatio * 200;
+          
+          if (score > maxScore && avgBrightness > 150 && whiteRatio > 0.3) {
+            maxScore = score;
+            bestCandidate = { x, y, score, brightness: avgBrightness };
+          }
+        }
+      }
+    }
+    
+    return bestCandidate;
+  }, []);
+
+  // IMPROVED ball detection - motion-based for tracking in flight
+  const detectBall = useCallback((currentFrame, previousFrame, baselineFrame = null) => {
     if (!previousFrame) return null;
 
     const width = currentFrame.width;
     const height = currentFrame.height;
     
     // Use smaller blocks for better detection accuracy
-    const blockSize = 15; // Smaller = more precise
-    const threshold = 15; // MUCH lower threshold - detect smaller motions
-    const brightnessThreshold = 100; // Lower brightness threshold for outdoor lighting
+    const blockSize = 12; // Smaller = more precise
+    const threshold = 12; // Lower threshold for better sensitivity
+    const brightnessThreshold = 100;
     
     // Motion detection: compare frames
     let maxMotion = 0;
     let ballPosition = null;
     let candidatePositions = [];
     
-    // Scan every block - don't skip any for better detection
-    for (let y = 0; y < height - blockSize; y += blockSize) {
-      for (let x = 0; x < width - blockSize; x += blockSize) {
+    // If we have a locked position, focus search around it (faster and more accurate)
+    const searchRadius = lockedBallPosition ? 200 : null;
+    const startY = lockedBallPosition && searchRadius 
+      ? Math.max(0, lockedBallPosition.y - searchRadius)
+      : 0;
+    const endY = lockedBallPosition && searchRadius
+      ? Math.min(height - blockSize, lockedBallPosition.y + searchRadius)
+      : height - blockSize;
+    const startX = lockedBallPosition && searchRadius
+      ? Math.max(0, lockedBallPosition.x - searchRadius)
+      : 0;
+    const endX = lockedBallPosition && searchRadius
+      ? Math.min(width - blockSize, lockedBallPosition.x + searchRadius)
+      : width - blockSize;
+    
+    // Scan blocks - focused search if we have locked position
+    for (let y = startY; y < endY; y += blockSize) {
+      for (let x = startX; x < endX; x += blockSize) {
         let motion = 0;
         let sampleCount = 0;
         
-        // Sample more pixels for better accuracy
+        // Sample pixels for motion detection
         for (let dy = 0; dy < blockSize; dy += 2) {
           for (let dx = 0; dx < blockSize; dx += 2) {
             if (y + dy >= height || x + dx >= width) continue;
             
             const idx = ((y + dy) * width + (x + dx)) * 4;
             
+            // Compare with previous frame
             const rDiff = Math.abs(currentFrame.data[idx] - previousFrame.data[idx]);
             const gDiff = Math.abs(currentFrame.data[idx + 1] - previousFrame.data[idx + 1]);
             const bDiff = Math.abs(currentFrame.data[idx + 2] - previousFrame.data[idx + 2]);
@@ -328,7 +412,7 @@ const GolfMacApp = () => {
         if (sampleCount > 0) {
           motion /= sampleCount;
 
-          // Check for motion - don't require brightness to be high (works in all lighting)
+          // Check for motion
           if (motion > threshold) {
             const centerIdx = ((y + blockSize/2) * width + Math.floor(x + blockSize/2)) * 4;
             if (centerIdx < currentFrame.data.length - 2) {
@@ -337,16 +421,15 @@ const GolfMacApp = () => {
               const b = currentFrame.data[centerIdx + 2];
               const brightness = (r + g + b) / 3;
               
-              // More lenient detection - look for ANY moving object, not just white ones
-              // Golf balls can be various colors, and motion is the key indicator
+              // Prioritize fast-moving objects (ball in flight)
               if (motion > maxMotion) {
                 maxMotion = motion;
-                ballPosition = { x: x + blockSize/2, y: y + blockSize/2, motion };
+                ballPosition = { x: x + blockSize/2, y: y + blockSize/2, motion, brightness };
               }
               
-              // Also collect candidates with high motion
+              // Collect high-motion candidates
               if (motion > threshold * 1.5) {
-                candidatePositions.push({ x: x + blockSize/2, y: y + blockSize/2, motion });
+                candidatePositions.push({ x: x + blockSize/2, y: y + blockSize/2, motion, brightness });
               }
             }
           }
@@ -371,17 +454,44 @@ const GolfMacApp = () => {
     }
     
     return null;
-  }, [detectionSensitivity]);
+  }, [detectionSensitivity, lockedBallPosition]);
+
+  // Smooth trajectory to reduce jitter
+  const smoothTrajectory = useCallback((trail) => {
+    if (trail.length < 3) return trail;
+    
+    const smoothed = [];
+    smoothed.push(trail[0]); // Keep first point
+    
+    // Apply moving average for smoother trajectory
+    for (let i = 1; i < trail.length - 1; i++) {
+      const prev = trail[i - 1];
+      const curr = trail[i];
+      const next = trail[i + 1];
+      
+      smoothed.push({
+        x: (prev.x * 0.2 + curr.x * 0.6 + next.x * 0.2),
+        y: (prev.y * 0.2 + curr.y * 0.6 + next.y * 0.2),
+        timestamp: curr.timestamp
+      });
+    }
+    
+    smoothed.push(trail[trail.length - 1]); // Keep last point
+    return smoothed;
+  }, []);
 
   const drawBallTrail = useCallback((ctx, trail) => {
     if (trail.length < 2) return;
+
+    // Smooth the trail for better visualization
+    const smoothedTrail = smoothTrajectory(trail);
 
     ctx.lineWidth = 4;
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
 
-    for (let i = 1; i < trail.length; i++) {
-      const progress = i / trail.length;
+    for (let i = 1; i < smoothedTrail.length; i++) {
+      const progress = i / smoothedTrail.length;
       
       switch (traceEffect) {
         case 'electricity':
@@ -391,12 +501,12 @@ const GolfMacApp = () => {
           ctx.globalAlpha = 0.6 + Math.random() * 0.4;
           
           ctx.beginPath();
-          ctx.moveTo(trail[i-1].x, trail[i-1].y);
+          ctx.moveTo(smoothedTrail[i-1].x, smoothedTrail[i-1].y);
           
           // Add some jitter for electric effect
           const jitterX = (Math.random() - 0.5) * 5;
           const jitterY = (Math.random() - 0.5) * 5;
-          ctx.lineTo(trail[i].x + jitterX, trail[i].y + jitterY);
+          ctx.lineTo(smoothedTrail[i].x + jitterX, smoothedTrail[i].y + jitterY);
           ctx.stroke();
           
           // Glow effect
@@ -413,18 +523,18 @@ const GolfMacApp = () => {
           ctx.globalAlpha = progress;
           
           ctx.beginPath();
-          ctx.moveTo(trail[i-1].x, trail[i-1].y);
-          ctx.lineTo(trail[i].x, trail[i].y);
+          ctx.moveTo(smoothedTrail[i-1].x, smoothedTrail[i-1].y);
+          ctx.lineTo(smoothedTrail[i].x, smoothedTrail[i].y);
           ctx.stroke();
           
           // Draw wave particles
           if (i % 3 === 0) {
-            const angle = Math.atan2(trail[i].y - trail[i-1].y, trail[i].x - trail[i-1].x);
+            const angle = Math.atan2(smoothedTrail[i].y - smoothedTrail[i-1].y, smoothedTrail[i].x - smoothedTrail[i-1].x);
             for (let offset of [-Math.PI/4, Math.PI/4]) {
               ctx.beginPath();
-              const waveX = trail[i].x + Math.cos(angle + offset) * 10;
-              const waveY = trail[i].y + Math.sin(angle + offset) * 10;
-              ctx.moveTo(trail[i].x, trail[i].y);
+              const waveX = smoothedTrail[i].x + Math.cos(angle + offset) * 10;
+              const waveY = smoothedTrail[i].y + Math.sin(angle + offset) * 10;
+              ctx.moveTo(smoothedTrail[i].x, smoothedTrail[i].y);
               ctx.lineTo(waveX, waveY);
               ctx.stroke();
             }
@@ -439,8 +549,8 @@ const GolfMacApp = () => {
           ctx.globalAlpha = 0.8;
           
           ctx.beginPath();
-          ctx.moveTo(trail[i-1].x, trail[i-1].y);
-          ctx.lineTo(trail[i].x, trail[i].y);
+          ctx.moveTo(smoothedTrail[i-1].x, smoothedTrail[i-1].y);
+          ctx.lineTo(smoothedTrail[i].x, smoothedTrail[i].y);
           ctx.stroke();
           
           // Flame particles
@@ -448,8 +558,8 @@ const GolfMacApp = () => {
             ctx.fillStyle = `hsl(${hue}, 100%, 60%)`;
             ctx.globalAlpha = 0.6;
             ctx.beginPath();
-            ctx.arc(trail[i].x + (Math.random() - 0.5) * 10, 
-                   trail[i].y - Math.random() * 15, 
+            ctx.arc(smoothedTrail[i].x + (Math.random() - 0.5) * 10, 
+                   smoothedTrail[i].y - Math.random() * 15, 
                    2 + Math.random() * 3, 0, Math.PI * 2);
             ctx.fill();
           }
@@ -462,8 +572,8 @@ const GolfMacApp = () => {
           ctx.globalAlpha = 0.7;
           
           ctx.beginPath();
-          ctx.moveTo(trail[i-1].x, trail[i-1].y);
-          ctx.lineTo(trail[i].x, trail[i].y);
+          ctx.moveTo(smoothedTrail[i-1].x, smoothedTrail[i-1].y);
+          ctx.lineTo(smoothedTrail[i].x, smoothedTrail[i].y);
           ctx.stroke();
           
           // Droplets
@@ -471,11 +581,11 @@ const GolfMacApp = () => {
             ctx.fillStyle = traceColor;
             ctx.globalAlpha = 0.4;
             ctx.beginPath();
-            ctx.arc(trail[i].x, trail[i].y, 3, 0, Math.PI * 2);
+            ctx.arc(smoothedTrail[i].x, smoothedTrail[i].y, 3, 0, Math.PI * 2);
             ctx.fill();
             
             ctx.beginPath();
-            ctx.arc(trail[i].x, trail[i].y, 6, 0, Math.PI * 2);
+            ctx.arc(smoothedTrail[i].x, smoothedTrail[i].y, 6, 0, Math.PI * 2);
             ctx.strokeStyle = traceColor;
             ctx.lineWidth = 1;
             ctx.stroke();
@@ -485,10 +595,11 @@ const GolfMacApp = () => {
     }
 
     ctx.globalAlpha = 1;
-  }, [traceEffect, traceColor]);
+  }, [traceEffect, traceColor, smoothTrajectory]);
 
   const processFrame = useCallback(() => {
-    if (!videoRef.current || !canvasRef.current || !isRecording) {
+    // Run during recording OR pre-detection mode
+    if (!videoRef.current || !canvasRef.current || (!isRecording && !preDetectionMode)) {
       animationFrameRef.current = requestAnimationFrame(processFrame);
       return;
     }
@@ -553,34 +664,90 @@ const GolfMacApp = () => {
     // Get image data for processing
     const currentFrame = ctx.getImageData(0, 0, canvas.width, canvas.height);
 
-    // Detect ball if we have previous frame
-    if (previousFrameRef.current) {
-      const ballPos = detectBall(currentFrame, previousFrameRef.current);
+    // PRE-DETECTION MODE: Lock onto ball before recording starts
+    if (preDetectionMode && !ballLockedIn) {
+      const stationaryBall = detectStationaryBall(currentFrame);
+      if (stationaryBall) {
+        setLockedBallPosition({ x: stationaryBall.x, y: stationaryBall.y });
+        setBallLockedIn(true);
+        // Draw lock-in indicator
+        ctx.beginPath();
+        ctx.arc(stationaryBall.x, stationaryBall.y, 25, 0, Math.PI * 2);
+        ctx.strokeStyle = '#00ff00';
+        ctx.lineWidth = 3;
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(stationaryBall.x, stationaryBall.y, 12, 0, Math.PI * 2);
+        ctx.fillStyle = '#00ff00';
+        ctx.globalAlpha = 0.5;
+        ctx.fill();
+        ctx.globalAlpha = 1;
+      }
+    }
+
+    // Draw locked ball position indicator if we have one
+    if (lockedBallPosition && !isRecording) {
+      ctx.beginPath();
+      ctx.arc(lockedBallPosition.x, lockedBallPosition.y, 20, 0, Math.PI * 2);
+      ctx.strokeStyle = '#00ff00';
+      ctx.lineWidth = 2;
+      ctx.setLineDash([5, 5]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+
+    // Detect ball during recording - use both motion and locked position
+    if (previousFrameRef.current && isRecording) {
+      // Use baseline frame if available for better detection
+      const referenceFrame = baselineFrameRef.current || previousFrameRef.current;
+      const ballPos = detectBall(currentFrame, previousFrameRef.current, referenceFrame);
 
       if (ballPos) {
-        ballTrailRef.current.push({
-          x: ballPos.x,
-          y: ballPos.y,
-          timestamp: Date.now()
-        });
+        // If we have a locked position, verify this is near it (helps filter false positives)
+        if (lockedBallPosition) {
+          const distance = Math.sqrt(
+            Math.pow(ballPos.x - lockedBallPosition.x, 2) + 
+            Math.pow(ballPos.y - lockedBallPosition.y, 2)
+          );
+          // Only accept detections within reasonable range (ball moved from tee)
+          if (distance > 500 && ballTrailRef.current.length === 0) {
+            // Too far from locked position and no trail yet - might be false positive
+            // But if we already have a trail, trust motion detection
+          } else {
+            ballTrailRef.current.push({
+              x: ballPos.x,
+              y: ballPos.y,
+              timestamp: Date.now()
+            });
+          }
+        } else {
+          // No locked position - trust motion detection
+          ballTrailRef.current.push({
+            x: ballPos.x,
+            y: ballPos.y,
+            timestamp: Date.now()
+          });
+        }
 
-        // Keep only recent trail points (last 3 seconds for longer trail)
+        // Keep trail points for longer (5 seconds for better visualization)
         const trailNow = Date.now();
-        ballTrailRef.current = ballTrailRef.current.filter(p => trailNow - p.timestamp < 3000);
+        ballTrailRef.current = ballTrailRef.current.filter(p => trailNow - p.timestamp < 5000);
 
         // Draw ball trail with effects
-        drawBallTrail(ctx, ballTrailRef.current);
+        if (ballTrailRef.current.length > 0) {
+          drawBallTrail(ctx, ballTrailRef.current);
+        }
 
         // Draw ball indicator - make it more visible
         ctx.beginPath();
-        ctx.arc(ballPos.x, ballPos.y, 18, 0, Math.PI * 2);
+        ctx.arc(ballPos.x, ballPos.y, isMobile ? 18 : 20, 0, Math.PI * 2);
         ctx.strokeStyle = traceColor;
-        ctx.lineWidth = 4;
+        ctx.lineWidth = isMobile ? 4 : 5;
         ctx.stroke();
         
         // Inner circle for better visibility
         ctx.beginPath();
-        ctx.arc(ballPos.x, ballPos.y, 8, 0, Math.PI * 2);
+        ctx.arc(ballPos.x, ballPos.y, isMobile ? 8 : 10, 0, Math.PI * 2);
         ctx.fillStyle = traceColor;
         ctx.globalAlpha = 0.6;
         ctx.fill();
@@ -592,7 +759,7 @@ const GolfMacApp = () => {
     previousFrameRef.current = currentFrame;
 
     animationFrameRef.current = requestAnimationFrame(processFrame);
-  }, [isRecording, isMobile, detectBall, traceColor, drawBallTrail]);
+  }, [isRecording, isMobile, detectBall, detectStationaryBall, traceColor, drawBallTrail, preDetectionMode, ballLockedIn, lockedBallPosition]);
 
   const toggleRecording = async () => {
     if (!isRecording) {
@@ -600,7 +767,27 @@ const GolfMacApp = () => {
       if (!streamRef.current) {
         await startCamera();
         // Wait a bit for camera to initialize
-        await new Promise(resolve => setTimeout(resolve, 200));
+        await new Promise(resolve => setTimeout(resolve, 300));
+      }
+
+      // PRE-DETECTION MODE: Start detecting ball BEFORE recording
+      setPreDetectionMode(true);
+      setBallLockedIn(false);
+      setLockedBallPosition(null);
+      ballTrailRef.current = [];
+      
+      // Wait 1 second for pre-detection to lock onto ball
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      
+      // Store baseline frame when recording starts (for better motion detection)
+      if (videoRef.current && canvasRef.current) {
+        const ctx = canvasRef.current.getContext('2d');
+        if (videoRef.current.videoWidth && videoRef.current.videoHeight) {
+          canvasRef.current.width = videoRef.current.videoWidth;
+          canvasRef.current.height = videoRef.current.videoHeight;
+          ctx.drawImage(videoRef.current, 0, 0, canvasRef.current.width, canvasRef.current.height);
+          baselineFrameRef.current = ctx.getImageData(0, 0, canvasRef.current.width, canvasRef.current.height);
+        }
       }
 
       // Start MediaRecorder for playback - use iPhone compatible format
@@ -652,7 +839,6 @@ const GolfMacApp = () => {
 
       setIsRecording(true);
       setIsProcessing(true);
-      ballTrailRef.current = [];
       recordingStartRef.current = Date.now();
       
       // Ensure video is playing
@@ -669,6 +855,7 @@ const GolfMacApp = () => {
   const stopRecording = async () => {
     setIsRecording(false);
     setIsProcessing(false);
+    setPreDetectionMode(false);
     
     // Stop MediaRecorder and wait for blob
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
@@ -680,6 +867,9 @@ const GolfMacApp = () => {
         console.error('Error stopping MediaRecorder:', err);
       }
     }
+    
+    // Reset detection state
+    baselineFrameRef.current = null;
     
     // DO NOT STOP CAMERA - Keep it running!
     
@@ -825,13 +1015,25 @@ const GolfMacApp = () => {
             style={{ width: '100vw', height: '100vh' }}
           />
           
-          <div className="absolute top-8 left-4 flex items-center gap-2 bg-red-500 text-white px-3 py-1 rounded-full animate-pulse z-50">
-            <div className="w-3 h-3 bg-white rounded-full"></div>
-            <span className="font-semibold">DETECTING BALL</span>
-          </div>
+          {ballLockedIn ? (
+            <div className="absolute top-8 left-4 flex items-center gap-2 bg-green-500 text-white px-3 py-1 rounded-full z-50">
+              <div className="w-3 h-3 bg-white rounded-full animate-pulse"></div>
+              <span className="font-semibold">BALL LOCKED IN ✓</span>
+            </div>
+          ) : preDetectionMode ? (
+            <div className="absolute top-8 left-4 flex items-center gap-2 bg-yellow-500 text-white px-3 py-1 rounded-full animate-pulse z-50">
+              <div className="w-3 h-3 bg-white rounded-full"></div>
+              <span className="font-semibold">SCANNING FOR BALL...</span>
+            </div>
+          ) : (
+            <div className="absolute top-8 left-4 flex items-center gap-2 bg-red-500 text-white px-3 py-1 rounded-full animate-pulse z-50">
+              <div className="w-3 h-3 bg-white rounded-full"></div>
+              <span className="font-semibold">TRACKING FLIGHT</span>
+            </div>
+          )}
 
           <div className="absolute top-8 right-4 bg-green-500 bg-opacity-90 text-white px-3 py-1 rounded-full text-xs font-semibold z-50">
-            TRACKING ACTIVE
+            {ballLockedIn ? 'READY TO RECORD' : isRecording ? 'TRACKING ACTIVE' : 'READY'}
           </div>
 
           <div className="absolute bottom-8 right-4 bg-black bg-opacity-60 text-white px-3 py-2 rounded-lg z-50">
@@ -885,18 +1087,32 @@ const GolfMacApp = () => {
             className="absolute top-0 left-0 w-full h-full pointer-events-none"
           />
         
-        {isRecording && (
-          <div className={`absolute ${isMobile ? 'top-8 left-4' : 'top-4 left-4'} flex items-center gap-2 bg-red-500 text-white px-3 py-1 rounded-full animate-pulse z-50`}>
-            <div className="w-3 h-3 bg-white rounded-full"></div>
-            <span className="font-semibold">DETECTING BALL</span>
-          </div>
-        )}
+            {ballLockedIn && !isRecording && (
+              <div className={`absolute ${isMobile ? 'top-8 left-4' : 'top-4 left-4'} flex items-center gap-2 bg-green-500 text-white px-3 py-1 rounded-full z-50`}>
+                <div className="w-3 h-3 bg-white rounded-full animate-pulse"></div>
+                <span className="font-semibold">BALL LOCKED IN ✓</span>
+              </div>
+            )}
+            
+            {preDetectionMode && !ballLockedIn && (
+              <div className={`absolute ${isMobile ? 'top-8 left-4' : 'top-4 left-4'} flex items-center gap-2 bg-yellow-500 text-white px-3 py-1 rounded-full animate-pulse z-50`}>
+                <div className="w-3 h-3 bg-white rounded-full"></div>
+                <span className="font-semibold">SCANNING FOR BALL...</span>
+              </div>
+            )}
 
-        {isProcessing && (
-          <div className={`absolute ${isMobile ? 'top-8 right-4' : 'top-4 right-4'} bg-green-500 bg-opacity-90 text-white px-3 py-1 rounded-full text-xs font-semibold z-50`}>
-            TRACKING ACTIVE
-          </div>
-        )}
+            {isRecording && !ballLockedIn && (
+              <div className={`absolute ${isMobile ? 'top-8 left-4' : 'top-4 left-4'} flex items-center gap-2 bg-red-500 text-white px-3 py-1 rounded-full animate-pulse z-50`}>
+                <div className="w-3 h-3 bg-white rounded-full"></div>
+                <span className="font-semibold">TRACKING FLIGHT</span>
+              </div>
+            )}
+
+            {isProcessing && (
+              <div className={`absolute ${isMobile ? 'top-8 right-4' : 'top-4 right-4'} bg-green-500 bg-opacity-90 text-white px-3 py-1 rounded-full text-xs font-semibold z-50`}>
+                {ballLockedIn ? 'READY TO RECORD' : isRecording ? 'TRACKING ACTIVE' : 'READY'}
+              </div>
+            )}
 
         <div className={`absolute ${isMobile ? 'bottom-20 right-4' : 'bottom-4 right-4'} bg-black bg-opacity-60 text-white px-3 py-2 rounded-lg z-50`}>
           <div className="text-xs opacity-80">Effect</div>
@@ -924,8 +1140,14 @@ const GolfMacApp = () => {
         </button>
       </div>
 
-        <div className="mt-4 text-center text-sm text-gray-600">
-          Point camera at ball, press record, then hit your shot
+        <div className="mt-4 text-center text-sm">
+          {ballLockedIn ? (
+            <span className="text-green-600 font-semibold">✓ Ball detected! Ready to record your shot.</span>
+          ) : preDetectionMode ? (
+            <span className="text-yellow-600 font-semibold">Scanning for ball on tee...</span>
+          ) : (
+            <span className="text-gray-600">Point camera at ball, press record, then hit your shot</span>
+          )}
         </div>
 
       {/* Playback Video - Only show when NOT recording to prevent glitches */}
