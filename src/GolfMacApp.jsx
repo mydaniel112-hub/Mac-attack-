@@ -754,11 +754,18 @@ const GolfMacApp = () => {
 
   const toggleRecording = async () => {
     if (!isRecording) {
-      // Make absolutely sure camera is running
+      // CRITICAL: Make sure camera is running FIRST
       if (!streamRef.current) {
         await startCamera();
-        // Wait a bit for camera to initialize
-        await new Promise(resolve => setTimeout(resolve, 300));
+      }
+      
+      // Wait for camera to be fully ready
+      await new Promise(resolve => setTimeout(resolve, 500));
+      
+      // Double-check stream exists
+      if (!streamRef.current) {
+        console.error('Camera stream not available');
+        return;
       }
 
       // Reset state for new recording
@@ -767,7 +774,7 @@ const GolfMacApp = () => {
       ballTrailRef.current = [];
       baselineFrameRef.current = null;
       previousFrameRef.current = null;
-      setPreDetectionMode(false); // No pre-detection - just start recording immediately
+      setPreDetectionMode(false);
 
       // Start MediaRecorder for playback - use iPhone compatible format
       recordedChunksRef.current = [];
@@ -956,6 +963,32 @@ const GolfMacApp = () => {
     }
   };
 
+  // CRITICAL: Connect stream to video whenever recording starts
+  useEffect(() => {
+    if (isRecording && streamRef.current) {
+      // Small delay to ensure the new video element is mounted
+      const connectStream = () => {
+        if (videoRef.current && streamRef.current) {
+          console.log('Connecting stream to video...');
+          videoRef.current.srcObject = streamRef.current;
+          videoRef.current.play().catch(err => console.log('Play error:', err));
+        }
+      };
+      
+      // Try immediately
+      connectStream();
+      
+      // Also retry after a small delay in case element wasn't mounted yet
+      const timeout = setTimeout(connectStream, 100);
+      const timeout2 = setTimeout(connectStream, 300);
+      
+      return () => {
+        clearTimeout(timeout);
+        clearTimeout(timeout2);
+      };
+    }
+  }, [isRecording]);
+
   const RecordTab = () => {
     // NATIVE iPHONE-STYLE RECORDING - Clean, simple, no glitches
     // Just the camera feed + stop button, nothing else
@@ -964,7 +997,14 @@ const GolfMacApp = () => {
         <div className="fixed inset-0 w-screen h-screen bg-black z-[9999]">
           {/* CLEAN VIDEO - No canvas overlay, no processing */}
           <video
-            ref={videoRef}
+            ref={(el) => {
+              videoRef.current = el;
+              // Connect stream immediately when element mounts
+              if (el && streamRef.current) {
+                el.srcObject = streamRef.current;
+                el.play().catch(() => {});
+              }
+            }}
             autoPlay
             playsInline
             muted
@@ -1005,7 +1045,14 @@ const GolfMacApp = () => {
 
         <div className="relative w-full h-96 bg-black rounded-lg overflow-hidden">
           <video
-            ref={videoRef}
+            ref={(el) => {
+              videoRef.current = el;
+              // Connect stream immediately when element mounts
+              if (el && streamRef.current && el.srcObject !== streamRef.current) {
+                el.srcObject = streamRef.current;
+                el.play().catch(() => {});
+              }
+            }}
             autoPlay
             playsInline
             muted
