@@ -29,6 +29,7 @@ const GolfMacApp = () => {
   const frameSkipCounterRef = useRef(0);
   const lastProcessTimeRef = useRef(0);
   const [recordedBlob, setRecordedBlob] = useState(null);
+  const [recordedVideoUrl, setRecordedVideoUrl] = useState(null);
   const [showPlayback, setShowPlayback] = useState(false);
   const mediaRecorderRef = useRef(null);
   const recordedChunksRef = useRef([]);
@@ -242,61 +243,57 @@ const GolfMacApp = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab]);
 
-  // CRITICAL: Keep camera stream ALWAYS connected and playing - prevent ANY freezing
+  // Handle recorded blob URL creation/cleanup (prevents memory leaks)
   useEffect(() => {
-    if (activeTab === 'record' && videoRef.current && streamRef.current) {
-      // Ensure stream is connected ONCE - don't keep resetting
-      if (videoRef.current.srcObject !== streamRef.current) {
-        videoRef.current.srcObject = streamRef.current;
+    if (recordedBlob) {
+      // Revoke old URL if exists
+      if (recordedVideoUrl) {
+        URL.revokeObjectURL(recordedVideoUrl);
+      }
+      // Create new URL
+      const url = URL.createObjectURL(recordedBlob);
+      setRecordedVideoUrl(url);
+    }
+    return () => {
+      if (recordedVideoUrl) {
+        URL.revokeObjectURL(recordedVideoUrl);
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [recordedBlob]);
+
+  // SIMPLE camera health check - runs once per second, not every frame
+  useEffect(() => {
+    if (activeTab !== 'record') return;
+    
+    const healthCheck = setInterval(() => {
+      // Only check if we have refs and stream
+      if (!videoRef.current || !streamRef.current) return;
+      
+      // Check if stream is still alive
+      const tracks = streamRef.current.getTracks();
+      const hasLiveTracks = tracks.some(t => t.readyState === 'live');
+      
+      if (!hasLiveTracks) {
+        // Stream died - restart once
+        console.warn('Stream health check: restarting camera');
+        startCamera();
+        return;
       }
       
-      // Keep video playing continuously - use requestAnimationFrame for smooth updates
-      const ensurePlaying = () => {
-        if (videoRef.current && streamRef.current) {
-          // Check if stream is still active
-          const tracks = streamRef.current.getTracks();
-          const activeTracks = tracks.filter(t => t.readyState === 'live');
-          
-          if (activeTracks.length === 0) {
-            // Stream died - restart camera
-            console.warn('Stream died - restarting');
-            startCamera();
-            return;
-          }
-          
-          // CRITICAL: Ensure video is ALWAYS playing - never paused
-          if (videoRef.current.paused || videoRef.current.ended || videoRef.current.readyState < 2) {
-            // Video is paused or not ready - restart playback
-            if (videoRef.current.srcObject !== streamRef.current) {
-              videoRef.current.srcObject = streamRef.current;
-            }
-            videoRef.current.play().catch((err) => {
-              console.warn('Play error:', err);
-              // Retry after a short delay
-              setTimeout(() => {
-                if (videoRef.current && streamRef.current) {
-                  videoRef.current.play().catch(() => {});
-                }
-              }, 100);
-            });
-          }
-          
-          // Ensure tracks are enabled
-          tracks.forEach(track => {
-            if (!track.enabled) {
-              track.enabled = true;
-            }
-          });
-        }
-        
-        // Continue monitoring
-        requestAnimationFrame(ensurePlaying);
-      };
+      // Enable any disabled tracks
+      tracks.forEach(track => {
+        if (!track.enabled) track.enabled = true;
+      });
       
-      // Start monitoring
-      ensurePlaying();
-    }
-  }, [activeTab, isRecording, preDetectionMode]);
+      // Ensure video is playing (but don't reset srcObject)
+      if (videoRef.current.paused && streamRef.current) {
+        videoRef.current.play().catch(() => {});
+      }
+    }, 1000); // Check every second, not every frame
+    
+    return () => clearInterval(healthCheck);
+  }, [activeTab]);
 
   // Detect stationary white/light colored objects (golf balls on tee)
   const detectStationaryBall = useCallback((frame) => {
@@ -605,7 +602,7 @@ const GolfMacApp = () => {
   }, [traceEffect, traceColor, smoothTrajectory]);
 
   const processFrame = useCallback(() => {
-    // Run during recording OR pre-detection mode
+    // Exit early if not active
     if (!videoRef.current || !canvasRef.current || (!isRecording && !preDetectionMode)) {
       animationFrameRef.current = requestAnimationFrame(processFrame);
       return;
@@ -613,88 +610,32 @@ const GolfMacApp = () => {
 
     const video = videoRef.current;
     const canvas = canvasRef.current;
-    const ctx = canvas.getContext('2d');
+    const ctx = canvas.getContext('2d', { alpha: false }); // Optimization: disable alpha
 
-    // CRITICAL: Check if stream is still alive - prevent black screen
-    if (streamRef.current) {
-      const tracks = streamRef.current.getTracks();
-      const activeTracks = tracks.filter(t => t.readyState === 'live');
-      
-      if (activeTracks.length === 0) {
-        // Stream died - restart camera immediately
-        console.warn('Stream died in processFrame - restarting');
-        startCamera().then(() => {
-          animationFrameRef.current = requestAnimationFrame(processFrame);
-        });
-        return;
-      }
-    }
-    
-    // CRITICAL: Ensure video is ready and playing - prevent black screen
-    if (!video.videoWidth || !video.videoHeight) {
-      // Video not ready yet - ensure stream is connected (but don't reset if already connected)
-      if (streamRef.current) {
-        if (video.srcObject !== streamRef.current) {
-          video.srcObject = streamRef.current;
-        }
-        if (video.paused) {
-          video.play().catch(() => {});
-        }
-      }
-      animationFrameRef.current = requestAnimationFrame(processFrame);
-      return;
-    }
-    
-    // Make sure video is playing - prevent black screen
-    // CRITICAL: Don't reset srcObject if it's already set (causes freezing)
-    if (video.paused || video.ended) {
-      if (streamRef.current && video.srcObject !== streamRef.current) {
-        video.srcObject = streamRef.current;
-      }
-      if (video.paused || video.ended) {
-        video.play().catch(() => {});
-      }
-      animationFrameRef.current = requestAnimationFrame(processFrame);
-      return;
-    }
-    
-    // CRITICAL: Ensure video is actually rendering - check readyState
-    if (video.readyState < 2) {
-      // Video not ready yet - wait
+    // Skip if video not ready - don't try to fix, just wait
+    if (!video.videoWidth || !video.videoHeight || video.readyState < 2) {
       animationFrameRef.current = requestAnimationFrame(processFrame);
       return;
     }
 
-    // Throttle processing slightly but keep it smooth
+    // Throttle on mobile for performance (but not too aggressively)
     const now = performance.now();
-    if (isMobile && now - lastProcessTimeRef.current < 50) {
+    if (isMobile && now - lastProcessTimeRef.current < 33) { // ~30fps on mobile
       animationFrameRef.current = requestAnimationFrame(processFrame);
       return;
     }
     lastProcessTimeRef.current = now;
 
-    // Only resize canvas if dimensions changed - prevents blinking
-    // CRITICAL: Resize BEFORE drawing to prevent glitches
+    // Resize canvas ONCE at start - not during recording to prevent glitches
     if (canvas.width !== video.videoWidth || canvas.height !== video.videoHeight) {
-      // Store current image data before resize to prevent black screen
-      const tempImageData = canvas.width > 0 && canvas.height > 0 
-        ? ctx.getImageData(0, 0, Math.min(canvas.width, video.videoWidth), Math.min(canvas.height, video.videoHeight))
-        : null;
-      
       canvas.width = video.videoWidth;
       canvas.height = video.videoHeight;
-      
-      // Restore previous frame if available to prevent black flash
-      if (tempImageData) {
-        ctx.putImageData(tempImageData, 0, 0);
-      }
     }
 
-    // Draw current frame FIRST - always show video (no flickering)
-    // CRITICAL: This must happen every frame to prevent freezing
+    // ALWAYS draw video frame first - this is the most important thing
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
-    // Get image data for processing - use requestIdleCallback if available to prevent blocking
+    // Get image data for detection (this is fast enough to not cause issues)
     const currentFrame = ctx.getImageData(0, 0, canvas.width, canvas.height);
 
     // PRE-DETECTION MODE: Lock onto ball before recording starts
@@ -803,32 +744,18 @@ const GolfMacApp = () => {
         await new Promise(resolve => setTimeout(resolve, 300));
       }
 
-      // PRE-DETECTION MODE: Start detecting ball BEFORE recording
-      setPreDetectionMode(true);
+      // Reset state for new recording
       setBallLockedIn(false);
       setLockedBallPosition(null);
       ballTrailRef.current = [];
+      baselineFrameRef.current = null;
+      previousFrameRef.current = null;
       
-      // Wait 1 second for pre-detection to lock onto ball (non-blocking)
-      await new Promise(resolve => setTimeout(resolve, 1000));
+      // Start pre-detection mode to find ball
+      setPreDetectionMode(true);
       
-      // Store baseline frame ASYNCHRONOUSLY to prevent freezing
-      // Use requestAnimationFrame to capture without blocking video
-      requestAnimationFrame(() => {
-        if (videoRef.current && canvasRef.current && videoRef.current.videoWidth && videoRef.current.videoHeight) {
-          const ctx = canvasRef.current.getContext('2d');
-          // Only resize if needed - don't resize if already correct
-          if (canvasRef.current.width !== videoRef.current.videoWidth || 
-              canvasRef.current.height !== videoRef.current.videoHeight) {
-            canvasRef.current.width = videoRef.current.videoWidth;
-            canvasRef.current.height = videoRef.current.videoHeight;
-          }
-          // Draw current frame
-          ctx.drawImage(videoRef.current, 0, 0, canvasRef.current.width, canvasRef.current.height);
-          // Capture baseline frame
-          baselineFrameRef.current = ctx.getImageData(0, 0, canvasRef.current.width, canvasRef.current.height);
-        }
-      });
+      // Start processing frames
+      processFrame();
 
       // Start MediaRecorder for playback - use iPhone compatible format
       recordedChunksRef.current = [];
@@ -880,13 +807,6 @@ const GolfMacApp = () => {
       setIsRecording(true);
       setIsProcessing(true);
       recordingStartRef.current = Date.now();
-      
-      // Ensure video is playing
-      if (videoRef.current) {
-        videoRef.current.play().catch(() => {});
-      }
-      
-      processFrame();
     } else {
       stopRecording();
     }
@@ -1034,36 +954,9 @@ const GolfMacApp = () => {
             autoPlay
             playsInline
             muted
+            webkit-playsinline="true"
             className="absolute inset-0 w-full h-full object-cover"
             style={{ width: '100vw', height: '100vh', objectFit: 'cover' }}
-            onLoadedMetadata={(e) => {
-              // Ensure video plays immediately when metadata loads
-              if (e.target) {
-                e.target.play().catch(() => {});
-              }
-            }}
-            onPlay={() => {
-              // Video started playing - keep it playing
-            }}
-            onPause={() => {
-              // CRITICAL: If video pauses, restart immediately to prevent freezing
-              if (videoRef.current && streamRef.current) {
-                videoRef.current.play().catch(() => {});
-              }
-            }}
-            onStalled={() => {
-              // Video stalled - restart playback
-              if (videoRef.current && streamRef.current) {
-                videoRef.current.play().catch(() => {});
-              }
-            }}
-            onWaiting={() => {
-              // Video waiting for data - ensure stream is connected
-              if (videoRef.current && streamRef.current && videoRef.current.srcObject !== streamRef.current) {
-                videoRef.current.srcObject = streamRef.current;
-                videoRef.current.play().catch(() => {});
-              }
-            }}
           />
           <canvas
             ref={canvasRef}
@@ -1127,39 +1020,9 @@ const GolfMacApp = () => {
             autoPlay
             playsInline
             muted
+            webkit-playsinline="true"
             className="w-full h-full object-cover"
             style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-            onLoadedMetadata={(e) => {
-              // Ensure video plays immediately when metadata loads
-              if (e.target && streamRef.current) {
-                if (e.target.srcObject !== streamRef.current) {
-                  e.target.srcObject = streamRef.current;
-                }
-                e.target.play().catch(() => {});
-              }
-            }}
-            onPlay={() => {
-              // Video started playing - keep it playing
-            }}
-            onPause={() => {
-              // CRITICAL: If video pauses, restart immediately to prevent freezing
-              if (videoRef.current && streamRef.current) {
-                videoRef.current.play().catch(() => {});
-              }
-            }}
-            onStalled={() => {
-              // Video stalled - restart playback
-              if (videoRef.current && streamRef.current) {
-                videoRef.current.play().catch(() => {});
-              }
-            }}
-            onWaiting={() => {
-              // Video waiting for data - ensure stream is connected
-              if (videoRef.current && streamRef.current && videoRef.current.srcObject !== streamRef.current) {
-                videoRef.current.srcObject = streamRef.current;
-                videoRef.current.play().catch(() => {});
-              }
-            }}
           />
           <canvas
             ref={canvasRef}
@@ -1230,7 +1093,7 @@ const GolfMacApp = () => {
         </div>
 
       {/* Playback Video - Only show when NOT recording to prevent glitches */}
-      {recordedBlob && !isRecording && (
+      {recordedVideoUrl && !isRecording && (
         <div className="mt-6 bg-gradient-to-br from-gray-800 to-black rounded-lg p-4 shadow-xl">
           <div className="flex justify-between items-center mb-3">
             <h3 className="text-lg font-bold text-white flex items-center gap-2">
@@ -1251,16 +1114,13 @@ const GolfMacApp = () => {
           {showPlayback && (
             <div className="relative bg-black rounded-lg overflow-hidden">
               <video
-                key={recordedBlob.size}
-                src={URL.createObjectURL(recordedBlob)}
+                src={recordedVideoUrl}
                 controls
                 playsInline
-                preload="metadata"
+                webkit-playsinline="true"
+                preload="auto"
                 className="w-full rounded-lg"
                 style={{ maxHeight: '500px', display: 'block' }}
-                onError={(e) => {
-                  console.error('Playback video error:', e);
-                }}
               />
             </div>
           )}
