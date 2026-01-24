@@ -602,40 +602,54 @@ const GolfMacApp = () => {
   }, [traceEffect, traceColor, smoothTrajectory]);
 
   const processFrame = useCallback(() => {
-    // Exit early if not active
-    if (!videoRef.current || !canvasRef.current || (!isRecording && !preDetectionMode)) {
-      animationFrameRef.current = requestAnimationFrame(processFrame);
+    // DISABLE processing during recording on mobile - causes glitches
+    // Only run for pre-detection (before recording) or on desktop
+    if (!videoRef.current || !canvasRef.current) {
+      return;
+    }
+    
+    // On mobile during recording: DON'T process - just let native video play
+    if (isMobile && isRecording) {
+      return; // Clean recording, no processing
+    }
+    
+    // Only process during pre-detection mode (before recording)
+    if (!preDetectionMode && !isRecording) {
       return;
     }
 
     const video = videoRef.current;
     const canvas = canvasRef.current;
-    const ctx = canvas.getContext('2d', { alpha: false }); // Optimization: disable alpha
+    const ctx = canvas.getContext('2d', { alpha: false });
 
-    // Skip if video not ready - don't try to fix, just wait
+    // Skip if video not ready
     if (!video.videoWidth || !video.videoHeight || video.readyState < 2) {
-      animationFrameRef.current = requestAnimationFrame(processFrame);
+      if (preDetectionMode) {
+        animationFrameRef.current = requestAnimationFrame(processFrame);
+      }
       return;
     }
 
-    // Throttle on mobile for performance (but not too aggressively)
+    // Throttle processing
     const now = performance.now();
-    if (isMobile && now - lastProcessTimeRef.current < 33) { // ~30fps on mobile
-      animationFrameRef.current = requestAnimationFrame(processFrame);
+    if (now - lastProcessTimeRef.current < 50) {
+      if (preDetectionMode) {
+        animationFrameRef.current = requestAnimationFrame(processFrame);
+      }
       return;
     }
     lastProcessTimeRef.current = now;
 
-    // Resize canvas ONCE at start - not during recording to prevent glitches
+    // Resize canvas if needed
     if (canvas.width !== video.videoWidth || canvas.height !== video.videoHeight) {
       canvas.width = video.videoWidth;
       canvas.height = video.videoHeight;
     }
 
-    // ALWAYS draw video frame first - this is the most important thing
+    // Draw video frame
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
-    // Get image data for detection (this is fast enough to not cause issues)
+    // Get image data for detection
     const currentFrame = ctx.getImageData(0, 0, canvas.width, canvas.height);
 
     // PRE-DETECTION MODE: Lock onto ball before recording starts
@@ -729,10 +743,13 @@ const GolfMacApp = () => {
       }
     }
 
-    // Always update previous frame
+    // Update previous frame
     previousFrameRef.current = currentFrame;
 
-    animationFrameRef.current = requestAnimationFrame(processFrame);
+    // Continue processing only during pre-detection
+    if (preDetectionMode && !isRecording) {
+      animationFrameRef.current = requestAnimationFrame(processFrame);
+    }
   }, [isRecording, isMobile, detectBall, detectStationaryBall, traceColor, drawBallTrail, preDetectionMode, ballLockedIn, lockedBallPosition]);
 
   const toggleRecording = async () => {
@@ -750,12 +767,7 @@ const GolfMacApp = () => {
       ballTrailRef.current = [];
       baselineFrameRef.current = null;
       previousFrameRef.current = null;
-      
-      // Start pre-detection mode to find ball
-      setPreDetectionMode(true);
-      
-      // Start processing frames
-      processFrame();
+      setPreDetectionMode(false); // No pre-detection - just start recording immediately
 
       // Start MediaRecorder for playback - use iPhone compatible format
       recordedChunksRef.current = [];
@@ -945,57 +957,34 @@ const GolfMacApp = () => {
   };
 
   const RecordTab = () => {
-    // When recording on mobile, hide everything else and show only camera
+    // NATIVE iPHONE-STYLE RECORDING - Clean, simple, no glitches
+    // Just the camera feed + stop button, nothing else
     if (isRecording && isMobile) {
       return (
-        <div className="fixed inset-0 w-screen h-screen bg-black z-[9999] m-0 p-0 overflow-hidden">
+        <div className="fixed inset-0 w-screen h-screen bg-black z-[9999]">
+          {/* CLEAN VIDEO - No canvas overlay, no processing */}
           <video
             ref={videoRef}
             autoPlay
             playsInline
             muted
             webkit-playsinline="true"
-            className="absolute inset-0 w-full h-full object-cover"
-            style={{ width: '100vw', height: '100vh', objectFit: 'cover' }}
-          />
-          <canvas
-            ref={canvasRef}
-            className="absolute inset-0 w-full h-full pointer-events-none"
-            style={{ width: '100vw', height: '100vh' }}
+            className="w-full h-full object-cover"
           />
           
-          {ballLockedIn ? (
-            <div className="absolute top-8 left-4 flex items-center gap-2 bg-green-500 text-white px-3 py-1 rounded-full z-50">
-              <div className="w-3 h-3 bg-white rounded-full animate-pulse"></div>
-              <span className="font-semibold">BALL LOCKED IN ✓</span>
-            </div>
-          ) : preDetectionMode ? (
-            <div className="absolute top-8 left-4 flex items-center gap-2 bg-yellow-500 text-white px-3 py-1 rounded-full animate-pulse z-50">
-              <div className="w-3 h-3 bg-white rounded-full"></div>
-              <span className="font-semibold">SCANNING FOR BALL...</span>
-            </div>
-          ) : (
-            <div className="absolute top-8 left-4 flex items-center gap-2 bg-red-500 text-white px-3 py-1 rounded-full animate-pulse z-50">
-              <div className="w-3 h-3 bg-white rounded-full"></div>
-              <span className="font-semibold">TRACKING FLIGHT</span>
-            </div>
-          )}
-
-          <div className="absolute top-8 right-4 bg-green-500 bg-opacity-90 text-white px-3 py-1 rounded-full text-xs font-semibold z-50">
-            {ballLockedIn ? 'READY TO RECORD' : isRecording ? 'TRACKING ACTIVE' : 'READY'}
+          {/* Recording indicator - top left */}
+          <div className="absolute top-12 left-4 flex items-center gap-2 z-50">
+            <div className="w-4 h-4 bg-red-500 rounded-full animate-pulse"></div>
+            <span className="text-white font-bold text-lg drop-shadow-lg">REC</span>
           </div>
 
-          <div className="absolute bottom-8 right-4 bg-black bg-opacity-60 text-white px-3 py-2 rounded-lg z-50">
-            <div className="text-xs opacity-80">Effect</div>
-            <div className="font-bold" style={{ color: traceColor }}>{traceEffect.toUpperCase()}</div>
-          </div>
-
-          <div className="absolute bottom-8 left-1/2 transform -translate-x-1/2 z-50">
+          {/* Stop button - bottom center */}
+          <div className="absolute bottom-12 left-1/2 transform -translate-x-1/2 z-50">
             <button
               onClick={toggleRecording}
-              className="w-20 h-20 rounded-full flex items-center justify-center bg-red-500 animate-pulse shadow-lg"
+              className="w-20 h-20 rounded-full bg-red-600 flex items-center justify-center shadow-2xl border-4 border-white"
             >
-              <Square className="w-8 h-8 text-white" />
+              <Square className="w-8 h-8 text-white" fill="white" />
             </button>
           </div>
         </div>
