@@ -10,7 +10,7 @@ const GolfMacApp = () => {
   const [shots, setShots] = useState([]);
   const [golfStreak, setGolfStreak] = useState(0);
   const [traceEffect, setTraceEffect] = useState('electricity');
-  const [traceColor, setTraceColor] = useState('#00ff00');
+  const [traceColor, setTraceColor] = useState('#ff0000'); // BRIGHT RED default
   const [modelLoaded, setModelLoaded] = useState(false);
   const [detectionSensitivity, setDetectionSensitivity] = useState(0.7);
   const [isMobile, setIsMobile] = useState(false);
@@ -96,10 +96,10 @@ const GolfMacApp = () => {
   const [userPosition, setUserPosition] = useState({ lat: 36.5674, lng: -121.9500 });
 
   const effects = [
-    { id: 'electricity', name: 'Electric', icon: Zap, color: '#00ff00' },
-    { id: 'waves', name: 'Waves', icon: Waves, color: '#00ffff' },
+    { id: 'electricity', name: 'Electric', icon: Zap, color: '#ff0000' },
+    { id: 'waves', name: 'Waves', icon: Waves, color: '#ff0000' },
     { id: 'fire', name: 'Fire', icon: Flame, color: '#ff3300' },
-    { id: 'water', name: 'Water', icon: Droplets, color: '#0099ff' }
+    { id: 'water', name: 'Water', icon: Droplets, color: '#ff0000' }
   ];
 
   useEffect(() => {
@@ -490,34 +490,51 @@ const GolfMacApp = () => {
     // Smooth the trail for better visualization
     const smoothedTrail = smoothTrajectory(trail);
 
-    ctx.lineWidth = 4;
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
 
+    // ALWAYS draw a BRIGHT RED base trail first for visibility
+    ctx.beginPath();
+    ctx.moveTo(smoothedTrail[0].x, smoothedTrail[0].y);
+    for (let i = 1; i < smoothedTrail.length; i++) {
+      ctx.lineTo(smoothedTrail[i].x, smoothedTrail[i].y);
+    }
+    ctx.strokeStyle = '#ff0000'; // BRIGHT RED
+    ctx.lineWidth = 8; // THICK line
+    ctx.globalAlpha = 1;
+    ctx.shadowBlur = 20;
+    ctx.shadowColor = '#ff0000';
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+
+    // Add inner white line for extra visibility
+    ctx.beginPath();
+    ctx.moveTo(smoothedTrail[0].x, smoothedTrail[0].y);
+    for (let i = 1; i < smoothedTrail.length; i++) {
+      ctx.lineTo(smoothedTrail[i].x, smoothedTrail[i].y);
+    }
+    ctx.strokeStyle = '#ffff00'; // Yellow inner
+    ctx.lineWidth = 3;
+    ctx.stroke();
+
+    // Now add effects on top
     for (let i = 1; i < smoothedTrail.length; i++) {
       const progress = i / smoothedTrail.length;
       
       switch (traceEffect) {
         case 'electricity':
-          // Electric effect with lightning
-          ctx.strokeStyle = traceColor;
-          ctx.lineWidth = 3 + Math.random() * 2;
-          ctx.globalAlpha = 0.6 + Math.random() * 0.4;
-          
-          ctx.beginPath();
-          ctx.moveTo(smoothedTrail[i-1].x, smoothedTrail[i-1].y);
-          
-          // Add some jitter for electric effect
-          const jitterX = (Math.random() - 0.5) * 5;
-          const jitterY = (Math.random() - 0.5) * 5;
-          ctx.lineTo(smoothedTrail[i].x + jitterX, smoothedTrail[i].y + jitterY);
-          ctx.stroke();
-          
-          // Glow effect
-          ctx.shadowBlur = 15;
-          ctx.shadowColor = traceColor;
-          ctx.stroke();
-          ctx.shadowBlur = 0;
+          // Electric sparks
+          if (i % 2 === 0) {
+            ctx.strokeStyle = '#ffffff';
+            ctx.lineWidth = 2;
+            ctx.globalAlpha = 0.8;
+            const jitterX = (Math.random() - 0.5) * 15;
+            const jitterY = (Math.random() - 0.5) * 15;
+            ctx.beginPath();
+            ctx.moveTo(smoothedTrail[i].x, smoothedTrail[i].y);
+            ctx.lineTo(smoothedTrail[i].x + jitterX, smoothedTrail[i].y + jitterY);
+            ctx.stroke();
+          }
           break;
 
         case 'waves':
@@ -602,18 +619,11 @@ const GolfMacApp = () => {
   }, [traceEffect, traceColor, smoothTrajectory]);
 
   const processFrame = useCallback(() => {
-    // DISABLE processing during recording on mobile - causes glitches
-    // Only run for pre-detection (before recording) or on desktop
     if (!videoRef.current || !canvasRef.current) {
       return;
     }
     
-    // On mobile during recording: DON'T process - just let native video play
-    if (isMobile && isRecording) {
-      return; // Clean recording, no processing
-    }
-    
-    // Only process during pre-detection mode (before recording)
+    // Run during pre-detection OR recording
     if (!preDetectionMode && !isRecording) {
       return;
     }
@@ -624,18 +634,14 @@ const GolfMacApp = () => {
 
     // Skip if video not ready
     if (!video.videoWidth || !video.videoHeight || video.readyState < 2) {
-      if (preDetectionMode) {
-        animationFrameRef.current = requestAnimationFrame(processFrame);
-      }
+      animationFrameRef.current = requestAnimationFrame(processFrame);
       return;
     }
 
-    // Throttle processing
+    // Throttle processing (30fps)
     const now = performance.now();
-    if (now - lastProcessTimeRef.current < 50) {
-      if (preDetectionMode) {
-        animationFrameRef.current = requestAnimationFrame(processFrame);
-      }
+    if (now - lastProcessTimeRef.current < 33) {
+      animationFrameRef.current = requestAnimationFrame(processFrame);
       return;
     }
     lastProcessTimeRef.current = now;
@@ -746,8 +752,8 @@ const GolfMacApp = () => {
     // Update previous frame
     previousFrameRef.current = currentFrame;
 
-    // Continue processing only during pre-detection
-    if (preDetectionMode && !isRecording) {
+    // Continue processing during pre-detection OR recording
+    if (preDetectionMode || isRecording) {
       animationFrameRef.current = requestAnimationFrame(processFrame);
     }
   }, [isRecording, isMobile, detectBall, detectStationaryBall, traceColor, drawBallTrail, preDetectionMode, ballLockedIn, lockedBallPosition]);
@@ -774,7 +780,12 @@ const GolfMacApp = () => {
       ballTrailRef.current = [];
       baselineFrameRef.current = null;
       previousFrameRef.current = null;
-      setPreDetectionMode(false);
+      
+      // ENABLE PRE-DETECTION - Find the ball on tee before swing
+      setPreDetectionMode(true);
+      
+      // Start processing to find the ball
+      processFrame();
 
       // Start MediaRecorder for playback - use iPhone compatible format
       recordedChunksRef.current = [];
@@ -990,16 +1001,14 @@ const GolfMacApp = () => {
   }, [isRecording]);
 
   const RecordTab = () => {
-    // NATIVE iPHONE-STYLE RECORDING - Clean, simple, no glitches
-    // Just the camera feed + stop button, nothing else
+    // FULLSCREEN RECORDING with ball tracking
     if (isRecording && isMobile) {
       return (
         <div className="fixed inset-0 w-screen h-screen bg-black z-[9999]">
-          {/* CLEAN VIDEO - No canvas overlay, no processing */}
+          {/* Video feed */}
           <video
             ref={(el) => {
               videoRef.current = el;
-              // Connect stream immediately when element mounts
               if (el && streamRef.current) {
                 el.srcObject = streamRef.current;
                 el.play().catch(() => {});
@@ -1009,16 +1018,33 @@ const GolfMacApp = () => {
             playsInline
             muted
             webkit-playsinline="true"
-            className="w-full h-full object-cover"
+            className="absolute inset-0 w-full h-full object-cover"
           />
           
-          {/* Recording indicator - top left */}
-          <div className="absolute top-12 left-4 flex items-center gap-2 z-50">
-            <div className="w-4 h-4 bg-red-500 rounded-full animate-pulse"></div>
-            <span className="text-white font-bold text-lg drop-shadow-lg">REC</span>
-          </div>
+          {/* Canvas overlay for ball trail - BRIGHT RED */}
+          <canvas
+            ref={canvasRef}
+            className="absolute inset-0 w-full h-full pointer-events-none"
+            style={{ mixBlendMode: 'normal' }}
+          />
+          
+          {/* Ball locked indicator */}
+          {ballLockedIn && (
+            <div className="absolute top-12 left-4 flex items-center gap-2 z-50 bg-green-500 px-3 py-2 rounded-full">
+              <div className="w-3 h-3 bg-white rounded-full"></div>
+              <span className="text-white font-bold">BALL LOCKED ✓</span>
+            </div>
+          )}
+          
+          {/* Recording indicator */}
+          {!ballLockedIn && (
+            <div className="absolute top-12 left-4 flex items-center gap-2 z-50">
+              <div className="w-4 h-4 bg-red-500 rounded-full animate-pulse"></div>
+              <span className="text-white font-bold text-lg drop-shadow-lg">TRACKING</span>
+            </div>
+          )}
 
-          {/* Stop button - bottom center */}
+          {/* Stop button */}
           <div className="absolute bottom-12 left-1/2 transform -translate-x-1/2 z-50">
             <button
               onClick={toggleRecording}
@@ -1128,7 +1154,7 @@ const GolfMacApp = () => {
           )}
         </div>
 
-      {/* Playback Video - Only show when NOT recording to prevent glitches */}
+      {/* Playback Video - iPhone gallery style aspect ratio */}
       {recordedVideoUrl && !isRecording && (
         <div className="mt-6 bg-gradient-to-br from-gray-800 to-black rounded-lg p-4 shadow-xl">
           <div className="flex justify-between items-center mb-3">
@@ -1148,15 +1174,20 @@ const GolfMacApp = () => {
             </button>
           </div>
           {showPlayback && (
-            <div className="relative bg-black rounded-lg overflow-hidden">
+            <div className="relative bg-black rounded-lg overflow-hidden flex justify-center">
               <video
                 src={recordedVideoUrl}
                 controls
                 playsInline
                 webkit-playsinline="true"
                 preload="auto"
-                className="w-full rounded-lg"
-                style={{ maxHeight: '500px', display: 'block' }}
+                className="rounded-lg"
+                style={{ 
+                  maxHeight: '70vh',
+                  maxWidth: '100%',
+                  aspectRatio: '9/16',
+                  objectFit: 'contain'
+                }}
               />
             </div>
           )}
