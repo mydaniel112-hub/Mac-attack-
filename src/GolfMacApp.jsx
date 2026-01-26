@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { Camera, Play, Square } from 'lucide-react';
+import { Camera, Play, Square, Target, TrendingUp } from 'lucide-react';
 import { isMobileDevice, getOptimalCameraSettings } from './utils/mobileOptimization';
 
 const GolfMacApp = () => {
