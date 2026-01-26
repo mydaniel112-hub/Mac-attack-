@@ -17,10 +17,9 @@ const GolfMacApp = () => {
   const [ballLockedIn, setBallLockedIn] = useState(false);
   const [preDetectionMode, setPreDetectionMode] = useState(false);
   const [lockedBallPosition, setLockedBallPosition] = useState(null);
-  const [debugInfo, setDebugInfo] = useState({ detections: 0, motion: 0, candidates: [] });
+  const debugInfoRef = useRef({ detections: 0, motion: 0, candidates: [] }); // Use ref instead of state to prevent re-renders
   
   const videoRef = useRef(null);
-  const playbackVideoRef = useRef(null); // SEPARATE ref for playback - prevents conflicts
   const canvasRef = useRef(null);
   const streamRef = useRef(null);
   const animationFrameRef = useRef(null);
@@ -30,11 +29,12 @@ const GolfMacApp = () => {
   const recordingStartRef = useRef(null);
   const frameSkipCounterRef = useRef(0);
   const lastProcessTimeRef = useRef(0);
-  const [recordedBlob, setRecordedBlob] = useState(null);
-  const [recordedVideoUrl, setRecordedVideoUrl] = useState(null);
-  const [showPlayback, setShowPlayback] = useState(false);
-  const mediaRecorderRef = useRef(null);
-  const recordedChunksRef = useRef([]);
+  // REMOVED playback feature - it was causing crashes
+  // const [recordedBlob, setRecordedBlob] = useState(null);
+  // const [recordedVideoUrl, setRecordedVideoUrl] = useState(null);
+  // const [showPlayback, setShowPlayback] = useState(false);
+  // const mediaRecorderRef = useRef(null);
+  // const recordedChunksRef = useRef([]);
   const smoothedTrailRef = useRef([]);
 
   // Golf courses with hole information
@@ -245,52 +245,7 @@ const GolfMacApp = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab]);
 
-  // Handle recorded blob URL creation/cleanup (prevents memory leaks)
-  useEffect(() => {
-    if (recordedBlob) {
-      // Revoke old URL if exists
-      if (recordedVideoUrl) {
-        try {
-          URL.revokeObjectURL(recordedVideoUrl);
-        } catch (e) {
-          console.log('Error revoking URL:', e);
-        }
-      }
-      // Create new URL
-      try {
-        const url = URL.createObjectURL(recordedBlob);
-        setRecordedVideoUrl(url);
-      } catch (e) {
-        console.error('Error creating video URL:', e);
-      }
-    }
-    return () => {
-      if (recordedVideoUrl) {
-        try {
-          URL.revokeObjectURL(recordedVideoUrl);
-        } catch (e) {
-          // Ignore cleanup errors
-        }
-      }
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [recordedBlob]);
-
-  // CRITICAL: Cleanup playback video when hiding, unmounting, or when recording starts
-  useEffect(() => {
-    if ((!showPlayback || isRecording) && playbackVideoRef.current) {
-      try {
-        playbackVideoRef.current.pause();
-        playbackVideoRef.current.src = '';
-        playbackVideoRef.current.load();
-        if (isRecording) {
-          setShowPlayback(false); // Force close playback when recording
-        }
-      } catch (e) {
-        console.log('Error cleaning playback video:', e);
-      }
-    }
-  }, [showPlayback, isRecording]);
+  // REMOVED all playback-related code - it was causing crashes
 
   // SIMPLE camera health check - runs once per second, not every frame
   useEffect(() => {
@@ -389,8 +344,8 @@ const GolfMacApp = () => {
       }
     }
     
-    // Update debug info
-    setDebugInfo(prev => ({ ...prev, candidates: candidates.slice(0, 5) }));
+    // Update debug info (use ref)
+    debugInfoRef.current.candidates = candidates.slice(0, 5);
     
     return bestCandidate;
   }, []);
@@ -481,13 +436,12 @@ const GolfMacApp = () => {
     // Use sensitivity multiplier - lower means MORE sensitive
     const effectiveThreshold = threshold * (2 - detectionSensitivity) * 0.5; // Even more sensitive
     
-    // Update debug info
-    setDebugInfo(prev => ({ 
-      ...prev, 
+    // Update debug info (use ref to prevent re-renders)
+    debugInfoRef.current = { 
       detections: candidatePositions.length,
       motion: maxMotion,
       candidates: candidatePositions.slice(0, 3).map(c => ({ x: c.x, y: c.y }))
-    }));
+    };
     
     // Return the position if motion is strong enough
     if (maxMotion > effectiveThreshold) {
@@ -683,9 +637,9 @@ const GolfMacApp = () => {
       return;
     }
 
-    // Throttle processing (30fps)
+    // Throttle processing MORE aggressively to prevent memory issues (15fps instead of 30fps)
     const now = performance.now();
-    if (now - lastProcessTimeRef.current < 33) {
+    if (now - lastProcessTimeRef.current < 66) { // 15fps = 66ms between frames
       animationFrameRef.current = requestAnimationFrame(processFrame);
       return;
     }
@@ -701,6 +655,7 @@ const GolfMacApp = () => {
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
     // Get image data for detection
+    // Note: getImageData creates new object each time, but we'll limit how often we call it
     const currentFrame = ctx.getImageData(0, 0, canvas.width, canvas.height);
 
     // PRE-DETECTION MODE: Lock onto ball before recording starts
@@ -708,8 +663,8 @@ const GolfMacApp = () => {
       const stationaryBall = detectStationaryBall(currentFrame);
       
       // Draw debug: show all candidates
-      if (debugInfo.candidates.length > 0) {
-        debugInfo.candidates.forEach(cand => {
+      if (debugInfoRef.current.candidates.length > 0) {
+        debugInfoRef.current.candidates.forEach(cand => {
           ctx.beginPath();
           ctx.arc(cand.x, cand.y, 15, 0, Math.PI * 2);
           ctx.strokeStyle = '#ffff00';
@@ -754,8 +709,8 @@ const GolfMacApp = () => {
       const ballPos = detectBall(currentFrame, previousFrameRef.current, referenceFrame);
 
       // Draw debug: show detection zones and candidates
-      if (debugInfo.candidates.length > 0) {
-        debugInfo.candidates.forEach(cand => {
+      if (debugInfoRef.current.candidates.length > 0) {
+        debugInfoRef.current.candidates.forEach(cand => {
           ctx.beginPath();
           ctx.arc(cand.x, cand.y, 10, 0, Math.PI * 2);
           ctx.strokeStyle = '#ffff00';
@@ -859,52 +814,7 @@ const GolfMacApp = () => {
         }
       }, 100);
 
-      // Start MediaRecorder for playback - use iPhone compatible format
-      recordedChunksRef.current = [];
-      if (streamRef.current) {
-        try {
-          // Try different MIME types for iPhone compatibility
-          let mimeType = 'video/webm';
-          if (MediaRecorder.isTypeSupported('video/webm;codecs=vp9')) {
-            mimeType = 'video/webm;codecs=vp9';
-          } else if (MediaRecorder.isTypeSupported('video/webm;codecs=vp8')) {
-            mimeType = 'video/webm;codecs=vp8';
-          } else if (MediaRecorder.isTypeSupported('video/mp4')) {
-            mimeType = 'video/mp4';
-          }
-          
-          const mediaRecorder = new MediaRecorder(streamRef.current, {
-            mimeType: mimeType,
-            videoBitsPerSecond: 8000000 // HIGH bitrate for crystal clear iPhone quality
-          });
-          
-          // Record data every second for smoother playback
-          mediaRecorder.ondataavailable = (event) => {
-            if (event.data && event.data.size > 0) {
-              recordedChunksRef.current.push(event.data);
-            }
-          };
-
-          mediaRecorder.onstop = () => {
-            if (recordedChunksRef.current.length > 0) {
-              const blobType = mimeType.includes('mp4') ? 'video/mp4' : 'video/webm';
-              const blob = new Blob(recordedChunksRef.current, { type: blobType });
-              setRecordedBlob(blob);
-            }
-          };
-
-          mediaRecorder.onerror = (event) => {
-            console.error('MediaRecorder error:', event.error);
-          };
-
-          // Start recording with timeslice for smoother playback
-          mediaRecorder.start(1000); // Get data every second
-          mediaRecorderRef.current = mediaRecorder;
-        } catch (err) {
-          console.log('MediaRecorder error:', err);
-          // If recording fails, just continue without recording
-        }
-      }
+      // REMOVED MediaRecorder - it was causing crashes and memory issues
 
       setIsRecording(true);
       setIsProcessing(true);
@@ -919,30 +829,9 @@ const GolfMacApp = () => {
     setIsProcessing(false);
     setPreDetectionMode(false);
     
-    // CRITICAL: Ensure playback is closed before stopping recording
-    if (showPlayback && playbackVideoRef.current) {
-      try {
-        playbackVideoRef.current.pause();
-        playbackVideoRef.current.src = '';
-        setShowPlayback(false);
-      } catch (e) {
-        console.log('Error closing playback:', e);
-      }
-    }
-    
-    // Stop MediaRecorder and wait for blob
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-      try {
-        mediaRecorderRef.current.stop();
-        // Wait for blob to be created
-        await new Promise(resolve => setTimeout(resolve, 500));
-      } catch (err) {
-        console.error('Error stopping MediaRecorder:', err);
-      }
-    }
-    
     // Reset detection state
     baselineFrameRef.current = null;
+    previousFrameRef.current = null; // Clear previous frame to free memory
     
     // DO NOT STOP CAMERA - Keep it running!
     
@@ -1129,8 +1018,8 @@ const GolfMacApp = () => {
 
           {/* DEBUG INFO - Show detection status */}
           <div className="absolute top-12 right-4 bg-black bg-opacity-70 text-white text-xs p-2 rounded z-50">
-            <div>Detections: {debugInfo.detections}</div>
-            <div>Motion: {Math.round(debugInfo.motion)}</div>
+            <div>Detections: {debugInfoRef.current.detections}</div>
+            <div>Motion: {Math.round(debugInfoRef.current.motion)}</div>
             <div>Trail: {ballTrailRef.current.length} pts</div>
           </div>
 
@@ -1244,66 +1133,7 @@ const GolfMacApp = () => {
           )}
         </div>
 
-      {/* Playback Video - COMPLETELY ISOLATED from camera */}
-      {recordedVideoUrl && !isRecording && activeTab === 'record' && (
-        <div className="mt-6 bg-gradient-to-br from-gray-800 to-black rounded-lg p-4 shadow-xl">
-          <div className="flex justify-between items-center mb-3">
-            <h3 className="text-lg font-bold text-white flex items-center gap-2">
-              <Play className="w-5 h-5" />
-              Recording Playback
-            </h3>
-            <button
-              onClick={(e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                // Pause playback before toggling
-                if (playbackVideoRef.current) {
-                  try {
-                    playbackVideoRef.current.pause();
-                  } catch (err) {
-                    console.log('Error pausing playback:', err);
-                  }
-                }
-                setShowPlayback(!showPlayback);
-              }}
-              className="bg-cyan-500 hover:bg-cyan-600 active:bg-cyan-700 text-white px-4 py-2 rounded-lg text-sm font-semibold transition-colors"
-            >
-              {showPlayback ? 'Hide' : 'Show'} Playback
-            </button>
-          </div>
-          {showPlayback && (
-            <div className="relative bg-black rounded-lg overflow-hidden flex justify-center">
-              <video
-                ref={playbackVideoRef}
-                src={recordedVideoUrl}
-                controls
-                playsInline
-                webkit-playsinline="true"
-                preload="metadata"
-                className="rounded-lg"
-                style={{ 
-                  maxHeight: '70vh',
-                  maxWidth: '100%',
-                  aspectRatio: '9/16',
-                  objectFit: 'contain',
-                  display: 'block'
-                }}
-                onError={(e) => {
-                  console.error('Playback video error:', e);
-                  // Hide playback on error to prevent crashes
-                  setShowPlayback(false);
-                }}
-                onLoadStart={() => {
-                  // Ensure camera isn't affected
-                  if (videoRef.current && streamRef.current) {
-                    videoRef.current.srcObject = streamRef.current;
-                  }
-                }}
-              />
-            </div>
-          )}
-        </div>
-      )}
+      {/* REMOVED playback feature - it was causing app crashes */}
 
       {shots.length > 0 && (
         <div className="mt-6">
