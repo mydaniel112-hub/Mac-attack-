@@ -17,6 +17,7 @@ const GolfMacApp = () => {
   const [ballLockedIn, setBallLockedIn] = useState(false);
   const [preDetectionMode, setPreDetectionMode] = useState(false);
   const [lockedBallPosition, setLockedBallPosition] = useState(null);
+  const [debugInfo, setDebugInfo] = useState({ detections: 0, motion: 0, candidates: [] });
   
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
@@ -296,26 +297,29 @@ const GolfMacApp = () => {
   }, [activeTab]);
 
   // Detect stationary white/light colored objects (golf balls on tee)
+  // LOWERED THRESHOLDS for better detection
   const detectStationaryBall = useCallback((frame) => {
     if (!frame) return null;
 
     const width = frame.width;
     const height = frame.height;
-    const blockSize = 12; // Smaller blocks for precise detection
+    const blockSize = 20; // Larger blocks for faster detection
     
     let bestCandidate = null;
     let maxScore = 0;
+    let candidates = [];
     
     // Look for white/light colored circular objects
-    for (let y = blockSize; y < height - blockSize; y += blockSize) {
-      for (let x = blockSize; x < width - blockSize; x += blockSize) {
+    // Sample fewer blocks for performance
+    for (let y = blockSize; y < height - blockSize; y += blockSize * 2) {
+      for (let x = blockSize; x < width - blockSize; x += blockSize * 2) {
         let brightnessSum = 0;
         let pixelCount = 0;
         let whitePixelCount = 0;
         
         // Sample a circular area (golf ball is roughly circular)
-        for (let dy = -blockSize; dy <= blockSize; dy++) {
-          for (let dx = -blockSize; dx <= blockSize; dx++) {
+        for (let dy = -blockSize; dy <= blockSize; dy += 2) {
+          for (let dx = -blockSize; dx <= blockSize; dx += 2) {
             const dist = Math.sqrt(dx * dx + dy * dy);
             if (dist > blockSize) continue;
             
@@ -332,8 +336,8 @@ const GolfMacApp = () => {
             brightnessSum += brightness;
             pixelCount++;
             
-            // Count pixels that are white/light (golf ball color)
-            if (brightness > 180 && Math.abs(r - g) < 30 && Math.abs(g - b) < 30) {
+            // LOWERED threshold - look for ANY bright object
+            if (brightness > 120 && Math.abs(r - g) < 50 && Math.abs(g - b) < 50) {
               whitePixelCount++;
             }
           }
@@ -344,39 +348,43 @@ const GolfMacApp = () => {
           const whiteRatio = whitePixelCount / pixelCount;
           
           // Score based on brightness and whiteness
-          // Golf balls are typically bright white/light colored
-          const score = avgBrightness * 0.6 + whiteRatio * 200;
+          const score = avgBrightness * 0.4 + whiteRatio * 150;
           
-          if (score > maxScore && avgBrightness > 150 && whiteRatio > 0.3) {
+          // LOWERED thresholds - more lenient
+          if (score > maxScore && avgBrightness > 100 && whiteRatio > 0.15) {
             maxScore = score;
-            bestCandidate = { x, y, score, brightness: avgBrightness };
+            bestCandidate = { x, y, score, brightness: avgBrightness, whiteRatio };
+            candidates.push({ x, y, score, brightness: avgBrightness });
           }
         }
       }
     }
     
+    // Update debug info
+    setDebugInfo(prev => ({ ...prev, candidates: candidates.slice(0, 5) }));
+    
     return bestCandidate;
   }, []);
 
   // IMPROVED ball detection - motion-based for tracking in flight
+  // MUCH MORE SENSITIVE for better detection
   const detectBall = useCallback((currentFrame, previousFrame, baselineFrame = null) => {
     if (!previousFrame) return null;
 
     const width = currentFrame.width;
     const height = currentFrame.height;
     
-    // Use smaller blocks for better detection accuracy
-    const blockSize = 12; // Smaller = more precise
-    const threshold = 12; // Lower threshold for better sensitivity
-    const brightnessThreshold = 100;
+    // Larger blocks for faster processing
+    const blockSize = 16;
+    const threshold = 8; // MUCH LOWER - detect smaller motions
     
     // Motion detection: compare frames
     let maxMotion = 0;
     let ballPosition = null;
     let candidatePositions = [];
     
-    // If we have a locked position, focus search around it (faster and more accurate)
-    const searchRadius = lockedBallPosition ? 200 : null;
+    // If we have a locked position, focus search around it
+    const searchRadius = lockedBallPosition ? 300 : null;
     const startY = lockedBallPosition && searchRadius 
       ? Math.max(0, lockedBallPosition.y - searchRadius)
       : 0;
@@ -390,15 +398,15 @@ const GolfMacApp = () => {
       ? Math.min(width - blockSize, lockedBallPosition.x + searchRadius)
       : width - blockSize;
     
-    // Scan blocks - focused search if we have locked position
+    // Scan blocks - sample every other block for speed
     for (let y = startY; y < endY; y += blockSize) {
       for (let x = startX; x < endX; x += blockSize) {
         let motion = 0;
         let sampleCount = 0;
         
-        // Sample pixels for motion detection
-        for (let dy = 0; dy < blockSize; dy += 2) {
-          for (let dx = 0; dx < blockSize; dx += 2) {
+        // Sample pixels for motion detection (every 3rd pixel for speed)
+        for (let dy = 0; dy < blockSize; dy += 3) {
+          for (let dx = 0; dx < blockSize; dx += 3) {
             if (y + dy >= height || x + dx >= width) continue;
             
             const idx = ((y + dy) * width + (x + dx)) * 4;
@@ -416,7 +424,7 @@ const GolfMacApp = () => {
         if (sampleCount > 0) {
           motion /= sampleCount;
 
-          // Check for motion
+          // LOWERED threshold - detect ANY motion
           if (motion > threshold) {
             const centerIdx = ((y + blockSize/2) * width + Math.floor(x + blockSize/2)) * 4;
             if (centerIdx < currentFrame.data.length - 2) {
@@ -425,14 +433,14 @@ const GolfMacApp = () => {
               const b = currentFrame.data[centerIdx + 2];
               const brightness = (r + g + b) / 3;
               
-              // Prioritize fast-moving objects (ball in flight)
+              // Prioritize fast-moving objects
               if (motion > maxMotion) {
                 maxMotion = motion;
                 ballPosition = { x: x + blockSize/2, y: y + blockSize/2, motion, brightness };
               }
               
-              // Collect high-motion candidates
-              if (motion > threshold * 1.5) {
+              // Collect ALL motion candidates (more lenient)
+              if (motion > threshold * 1.2) {
                 candidatePositions.push({ x: x + blockSize/2, y: y + blockSize/2, motion, brightness });
               }
             }
@@ -442,17 +450,25 @@ const GolfMacApp = () => {
     }
 
     // Use sensitivity multiplier - lower means MORE sensitive
-    const effectiveThreshold = threshold * (2 - detectionSensitivity);
+    const effectiveThreshold = threshold * (2 - detectionSensitivity) * 0.5; // Even more sensitive
+    
+    // Update debug info
+    setDebugInfo(prev => ({ 
+      ...prev, 
+      detections: candidatePositions.length,
+      motion: maxMotion,
+      candidates: candidatePositions.slice(0, 3).map(c => ({ x: c.x, y: c.y }))
+    }));
     
     // Return the position if motion is strong enough
     if (maxMotion > effectiveThreshold) {
       return ballPosition;
     }
     
-    // If no strong candidate, try the best from candidates list
+    // If no strong candidate, try the best from candidates list (more lenient)
     if (candidatePositions.length > 0) {
       candidatePositions.sort((a, b) => b.motion - a.motion);
-      if (candidatePositions[0].motion > threshold * 0.8) {
+      if (candidatePositions[0].motion > threshold * 0.5) { // Much lower threshold
         return candidatePositions[0];
       }
     }
@@ -661,19 +677,31 @@ const GolfMacApp = () => {
     // PRE-DETECTION MODE: Lock onto ball before recording starts
     if (preDetectionMode && !ballLockedIn) {
       const stationaryBall = detectStationaryBall(currentFrame);
+      
+      // Draw debug: show all candidates
+      if (debugInfo.candidates.length > 0) {
+        debugInfo.candidates.forEach(cand => {
+          ctx.beginPath();
+          ctx.arc(cand.x, cand.y, 15, 0, Math.PI * 2);
+          ctx.strokeStyle = '#ffff00';
+          ctx.lineWidth = 2;
+          ctx.stroke();
+        });
+      }
+      
       if (stationaryBall) {
         setLockedBallPosition({ x: stationaryBall.x, y: stationaryBall.y });
         setBallLockedIn(true);
-        // Draw lock-in indicator
+        // Draw lock-in indicator - BRIGHT GREEN
         ctx.beginPath();
-        ctx.arc(stationaryBall.x, stationaryBall.y, 25, 0, Math.PI * 2);
+        ctx.arc(stationaryBall.x, stationaryBall.y, 30, 0, Math.PI * 2);
         ctx.strokeStyle = '#00ff00';
-        ctx.lineWidth = 3;
+        ctx.lineWidth = 4;
         ctx.stroke();
         ctx.beginPath();
-        ctx.arc(stationaryBall.x, stationaryBall.y, 12, 0, Math.PI * 2);
+        ctx.arc(stationaryBall.x, stationaryBall.y, 15, 0, Math.PI * 2);
         ctx.fillStyle = '#00ff00';
-        ctx.globalAlpha = 0.5;
+        ctx.globalAlpha = 0.7;
         ctx.fill();
         ctx.globalAlpha = 1;
       }
@@ -695,6 +723,17 @@ const GolfMacApp = () => {
       // Use baseline frame if available for better detection
       const referenceFrame = baselineFrameRef.current || previousFrameRef.current;
       const ballPos = detectBall(currentFrame, previousFrameRef.current, referenceFrame);
+
+      // Draw debug: show detection zones and candidates
+      if (debugInfo.candidates.length > 0) {
+        debugInfo.candidates.forEach(cand => {
+          ctx.beginPath();
+          ctx.arc(cand.x, cand.y, 10, 0, Math.PI * 2);
+          ctx.strokeStyle = '#ffff00';
+          ctx.lineWidth = 1;
+          ctx.stroke();
+        });
+      }
 
       if (ballPos) {
         // If we have a locked position, verify this is near it (helps filter false positives)
@@ -784,8 +823,12 @@ const GolfMacApp = () => {
       // ENABLE PRE-DETECTION - Find the ball on tee before swing
       setPreDetectionMode(true);
       
-      // Start processing to find the ball
-      processFrame();
+      // Start processing immediately - don't wait
+      setTimeout(() => {
+        if (videoRef.current && canvasRef.current) {
+          processFrame();
+        }
+      }, 100);
 
       // Start MediaRecorder for playback - use iPhone compatible format
       recordedChunksRef.current = [];
@@ -1043,6 +1086,13 @@ const GolfMacApp = () => {
               <span className="text-white font-bold text-lg drop-shadow-lg">TRACKING</span>
             </div>
           )}
+
+          {/* DEBUG INFO - Show detection status */}
+          <div className="absolute top-12 right-4 bg-black bg-opacity-70 text-white text-xs p-2 rounded z-50">
+            <div>Detections: {debugInfo.detections}</div>
+            <div>Motion: {Math.round(debugInfo.motion)}</div>
+            <div>Trail: {ballTrailRef.current.length} pts</div>
+          </div>
 
           {/* Stop button */}
           <div className="absolute bottom-12 left-1/2 transform -translate-x-1/2 z-50">
