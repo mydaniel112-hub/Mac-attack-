@@ -20,6 +20,7 @@ const GolfMacApp = () => {
   const [debugInfo, setDebugInfo] = useState({ detections: 0, motion: 0, candidates: [] });
   
   const videoRef = useRef(null);
+  const playbackVideoRef = useRef(null); // SEPARATE ref for playback - prevents conflicts
   const canvasRef = useRef(null);
   const streamRef = useRef(null);
   const animationFrameRef = useRef(null);
@@ -249,19 +250,47 @@ const GolfMacApp = () => {
     if (recordedBlob) {
       // Revoke old URL if exists
       if (recordedVideoUrl) {
-        URL.revokeObjectURL(recordedVideoUrl);
+        try {
+          URL.revokeObjectURL(recordedVideoUrl);
+        } catch (e) {
+          console.log('Error revoking URL:', e);
+        }
       }
       // Create new URL
-      const url = URL.createObjectURL(recordedBlob);
-      setRecordedVideoUrl(url);
+      try {
+        const url = URL.createObjectURL(recordedBlob);
+        setRecordedVideoUrl(url);
+      } catch (e) {
+        console.error('Error creating video URL:', e);
+      }
     }
     return () => {
       if (recordedVideoUrl) {
-        URL.revokeObjectURL(recordedVideoUrl);
+        try {
+          URL.revokeObjectURL(recordedVideoUrl);
+        } catch (e) {
+          // Ignore cleanup errors
+        }
       }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [recordedBlob]);
+
+  // CRITICAL: Cleanup playback video when hiding, unmounting, or when recording starts
+  useEffect(() => {
+    if ((!showPlayback || isRecording) && playbackVideoRef.current) {
+      try {
+        playbackVideoRef.current.pause();
+        playbackVideoRef.current.src = '';
+        playbackVideoRef.current.load();
+        if (isRecording) {
+          setShowPlayback(false); // Force close playback when recording
+        }
+      } catch (e) {
+        console.log('Error cleaning playback video:', e);
+      }
+    }
+  }, [showPlayback, isRecording]);
 
   // SIMPLE camera health check - runs once per second, not every frame
   useEffect(() => {
@@ -890,6 +919,17 @@ const GolfMacApp = () => {
     setIsProcessing(false);
     setPreDetectionMode(false);
     
+    // CRITICAL: Ensure playback is closed before stopping recording
+    if (showPlayback && playbackVideoRef.current) {
+      try {
+        playbackVideoRef.current.pause();
+        playbackVideoRef.current.src = '';
+        setShowPlayback(false);
+      } catch (e) {
+        console.log('Error closing playback:', e);
+      }
+    }
+    
     // Stop MediaRecorder and wait for blob
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
       try {
@@ -1204,8 +1244,8 @@ const GolfMacApp = () => {
           )}
         </div>
 
-      {/* Playback Video - iPhone gallery style aspect ratio */}
-      {recordedVideoUrl && !isRecording && (
+      {/* Playback Video - COMPLETELY ISOLATED from camera */}
+      {recordedVideoUrl && !isRecording && activeTab === 'record' && (
         <div className="mt-6 bg-gradient-to-br from-gray-800 to-black rounded-lg p-4 shadow-xl">
           <div className="flex justify-between items-center mb-3">
             <h3 className="text-lg font-bold text-white flex items-center gap-2">
@@ -1216,6 +1256,14 @@ const GolfMacApp = () => {
               onClick={(e) => {
                 e.preventDefault();
                 e.stopPropagation();
+                // Pause playback before toggling
+                if (playbackVideoRef.current) {
+                  try {
+                    playbackVideoRef.current.pause();
+                  } catch (err) {
+                    console.log('Error pausing playback:', err);
+                  }
+                }
                 setShowPlayback(!showPlayback);
               }}
               className="bg-cyan-500 hover:bg-cyan-600 active:bg-cyan-700 text-white px-4 py-2 rounded-lg text-sm font-semibold transition-colors"
@@ -1226,17 +1274,30 @@ const GolfMacApp = () => {
           {showPlayback && (
             <div className="relative bg-black rounded-lg overflow-hidden flex justify-center">
               <video
+                ref={playbackVideoRef}
                 src={recordedVideoUrl}
                 controls
                 playsInline
                 webkit-playsinline="true"
-                preload="auto"
+                preload="metadata"
                 className="rounded-lg"
                 style={{ 
                   maxHeight: '70vh',
                   maxWidth: '100%',
                   aspectRatio: '9/16',
-                  objectFit: 'contain'
+                  objectFit: 'contain',
+                  display: 'block'
+                }}
+                onError={(e) => {
+                  console.error('Playback video error:', e);
+                  // Hide playback on error to prevent crashes
+                  setShowPlayback(false);
+                }}
+                onLoadStart={() => {
+                  // Ensure camera isn't affected
+                  if (videoRef.current && streamRef.current) {
+                    videoRef.current.srcObject = streamRef.current;
+                  }
                 }}
               />
             </div>
