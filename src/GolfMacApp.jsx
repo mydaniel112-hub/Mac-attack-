@@ -1,23 +1,20 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { Camera, MapPin, Calendar, Settings, Play, Square, Zap, Waves, Droplets, Flame, AlertCircle, Target, TrendingUp, Navigation } from 'lucide-react';
-import { isMobileDevice, isIPhone, getOptimalCameraSettings, getOptimalBlockSize } from './utils/mobileOptimization';
-import { calculateDistance, recommendClub, calculateLandingPosition } from './utils/golfCalculations';
+import { Camera, Play, Square } from 'lucide-react';
+import { isMobileDevice, getOptimalCameraSettings } from './utils/mobileOptimization';
 
 const GolfMacApp = () => {
   const [activeTab, setActiveTab] = useState('record');
   const [isRecording, setIsRecording] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
-  const [shots, setShots] = useState([]);
-  const [golfStreak, setGolfStreak] = useState(0);
-  const [traceEffect, setTraceEffect] = useState('electricity');
-  const [traceColor, setTraceColor] = useState('#ff0000'); // BRIGHT RED default
+  const [traceColor, setTraceColor] = useState('#ff0000'); // BRIGHT RED
+  const [traceEffect] = useState('electricity'); // Default effect (not used in simplified version)
   const [modelLoaded, setModelLoaded] = useState(false);
   const [detectionSensitivity, setDetectionSensitivity] = useState(0.7);
   const [isMobile, setIsMobile] = useState(false);
   const [ballLockedIn, setBallLockedIn] = useState(false);
   const [preDetectionMode, setPreDetectionMode] = useState(false);
   const [lockedBallPosition, setLockedBallPosition] = useState(null);
-  const debugInfoRef = useRef({ detections: 0, motion: 0, candidates: [] }); // Use ref instead of state to prevent re-renders
+  const debugInfoRef = useRef({ detections: 0, motion: 0, candidates: [] });
   
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
@@ -29,136 +26,20 @@ const GolfMacApp = () => {
   const recordingStartRef = useRef(null);
   const frameSkipCounterRef = useRef(0);
   const lastProcessTimeRef = useRef(0);
-  // REMOVED playback feature - it was causing crashes
-  // const [recordedBlob, setRecordedBlob] = useState(null);
-  // const [recordedVideoUrl, setRecordedVideoUrl] = useState(null);
-  // const [showPlayback, setShowPlayback] = useState(false);
-  // const mediaRecorderRef = useRef(null);
-  // const recordedChunksRef = useRef([]);
+  // Playback state - stored separately from camera
+  const [recordedVideos, setRecordedVideos] = useState([]); // Array of {id, blob, trail, timestamp}
+  const mediaRecorderRef = useRef(null);
+  const recordedChunksRef = useRef([]);
   const smoothedTrailRef = useRef([]);
 
-  // Golf courses with hole information
-  const courses = [
-    { 
-      id: 1, 
-      name: 'Pebble Beach', 
-      lat: 36.5674, 
-      lng: -121.9500,
-      holes: Array.from({ length: 18 }, (_, i) => ({
-        number: i + 1,
-        par: [4, 5, 4, 4, 3, 5, 3, 4, 4, 4, 4, 3, 4, 5, 4, 4, 3, 5][i],
-        yardage: [380, 516, 397, 331, 195, 523, 107, 428, 462, 446, 373, 202, 445, 580, 396, 403, 178, 543][i],
-        lat: 36.5674 + (Math.random() - 0.5) * 0.01,
-        lng: -121.9500 + (Math.random() - 0.5) * 0.01
-      }))
-    },
-    { 
-      id: 2, 
-      name: 'Augusta National', 
-      lat: 33.5030, 
-      lng: -82.0200,
-      holes: Array.from({ length: 18 }, (_, i) => ({
-        number: i + 1,
-        par: [4, 5, 4, 3, 4, 3, 4, 5, 4, 4, 4, 3, 5, 4, 5, 3, 4, 4][i],
-        yardage: [445, 575, 350, 240, 455, 180, 450, 570, 460, 495, 505, 155, 510, 440, 530, 170, 440, 465][i],
-        lat: 33.5030 + (Math.random() - 0.5) * 0.01,
-        lng: -82.0200 + (Math.random() - 0.5) * 0.01
-      }))
-    },
-    { 
-      id: 3, 
-      name: 'St Andrews', 
-      lat: 56.3398, 
-      lng: -2.8008,
-      holes: Array.from({ length: 18 }, (_, i) => ({
-        number: i + 1,
-        par: [4, 4, 4, 4, 5, 4, 4, 3, 4, 4, 3, 4, 4, 5, 4, 4, 4, 4][i],
-        yardage: [376, 453, 397, 463, 568, 412, 371, 175, 352, 386, 174, 348, 465, 618, 455, 423, 495, 357][i],
-        lat: 56.3398 + (Math.random() - 0.5) * 0.01,
-        lng: -2.8008 + (Math.random() - 0.5) * 0.01
-      }))
-    },
-    {
-      id: 4,
-      name: 'My Local Course',
-      lat: 0,
-      lng: 0,
-      holes: Array.from({ length: 18 }, (_, i) => ({
-        number: i + 1,
-        par: 4,
-        yardage: 400,
-        lat: 0,
-        lng: 0
-      }))
-    }
-  ];
-
-  const [currentCourse, setCurrentCourse] = useState(courses[0]);
-  const [currentHole, setCurrentHole] = useState(1);
-  const [userPosition, setUserPosition] = useState({ lat: 36.5674, lng: -121.9500 });
-
-  const effects = [
-    { id: 'electricity', name: 'Electric', icon: Zap, color: '#ff0000' },
-    { id: 'waves', name: 'Waves', icon: Waves, color: '#ff0000' },
-    { id: 'fire', name: 'Fire', icon: Flame, color: '#ff3300' },
-    { id: 'water', name: 'Water', icon: Droplets, color: '#ff0000' }
-  ];
+  // REMOVED all GPS, courses, calendar, settings - keeping it simple
 
   useEffect(() => {
     // Detect mobile device
     setIsMobile(isMobileDevice());
 
-    // Mark detection model as loaded (no external library needed)
+    // Mark detection model as loaded
     setModelLoaded(true);
-
-    // GPS tracking - update continuously on mobile
-    if (navigator.geolocation) {
-      navigator.geolocation.getCurrentPosition(
-        (position) => {
-          const newPos = {
-            lat: position.coords.latitude,
-            lng: position.coords.longitude
-          };
-          setUserPosition(newPos);
-          
-          // Update course if not set
-          if (currentCourse.lat === 0 && currentCourse.lng === 0) {
-            // Set "My Local Course" to current position
-            setCurrentCourse(prev => ({
-              ...prev,
-              lat: newPos.lat,
-              lng: newPos.lng
-            }));
-          }
-        },
-        () => {}
-      );
-      
-      // Watch position for real-time updates
-      let watchId = navigator.geolocation.watchPosition(
-        (position) => {
-          setUserPosition({
-            lat: position.coords.latitude,
-            lng: position.coords.longitude
-          });
-        },
-        () => {},
-        { enableHighAccuracy: true, maximumAge: 1000 }
-      );
-      
-      return () => {
-        navigator.geolocation.clearWatch(watchId);
-      };
-    }
-
-    // Load golf streak
-    const savedStreak = localStorage.getItem('golfStreak');
-    if (savedStreak) {
-      const parsed = parseInt(savedStreak, 10);
-      if (!isNaN(parsed) && parsed >= 0) {
-        setGolfStreak(parsed);
-      }
-    }
 
     return () => {
       if (animationFrameRef.current) {
@@ -492,130 +373,35 @@ const GolfMacApp = () => {
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
 
-    // ALWAYS draw a BRIGHT RED base trail first for visibility
+    // SIMPLE BRIGHT RED TRAIL - drawn in real-time as ball moves
     ctx.beginPath();
     ctx.moveTo(smoothedTrail[0].x, smoothedTrail[0].y);
     for (let i = 1; i < smoothedTrail.length; i++) {
       ctx.lineTo(smoothedTrail[i].x, smoothedTrail[i].y);
     }
+    
+    // Bright red outer trail with glow
     ctx.strokeStyle = '#ff0000'; // BRIGHT RED
-    ctx.lineWidth = 8; // THICK line
+    ctx.lineWidth = 10; // THICK for visibility
     ctx.globalAlpha = 1;
-    ctx.shadowBlur = 20;
+    ctx.shadowBlur = 25;
     ctx.shadowColor = '#ff0000';
     ctx.stroke();
-    ctx.shadowBlur = 0;
-
-    // Add inner white line for extra visibility
+    
+    // Yellow inner line for contrast
     ctx.beginPath();
     ctx.moveTo(smoothedTrail[0].x, smoothedTrail[0].y);
     for (let i = 1; i < smoothedTrail.length; i++) {
       ctx.lineTo(smoothedTrail[i].x, smoothedTrail[i].y);
     }
-    ctx.strokeStyle = '#ffff00'; // Yellow inner
-    ctx.lineWidth = 3;
+    ctx.strokeStyle = '#ffff00'; // Yellow
+    ctx.lineWidth = 4;
+    ctx.shadowBlur = 0;
     ctx.stroke();
 
-    // Now add effects on top
-    for (let i = 1; i < smoothedTrail.length; i++) {
-      const progress = i / smoothedTrail.length;
-      
-      switch (traceEffect) {
-        case 'electricity':
-          // Electric sparks
-          if (i % 2 === 0) {
-            ctx.strokeStyle = '#ffffff';
-            ctx.lineWidth = 2;
-            ctx.globalAlpha = 0.8;
-            const jitterX = (Math.random() - 0.5) * 15;
-            const jitterY = (Math.random() - 0.5) * 15;
-            ctx.beginPath();
-            ctx.moveTo(smoothedTrail[i].x, smoothedTrail[i].y);
-            ctx.lineTo(smoothedTrail[i].x + jitterX, smoothedTrail[i].y + jitterY);
-            ctx.stroke();
-          }
-          break;
-
-        case 'waves':
-          // Wave effect
-          ctx.strokeStyle = traceColor;
-          ctx.lineWidth = 3;
-          ctx.globalAlpha = progress;
-          
-          ctx.beginPath();
-          ctx.moveTo(smoothedTrail[i-1].x, smoothedTrail[i-1].y);
-          ctx.lineTo(smoothedTrail[i].x, smoothedTrail[i].y);
-          ctx.stroke();
-          
-          // Draw wave particles
-          if (i % 3 === 0) {
-            const angle = Math.atan2(smoothedTrail[i].y - smoothedTrail[i-1].y, smoothedTrail[i].x - smoothedTrail[i-1].x);
-            for (let offset of [-Math.PI/4, Math.PI/4]) {
-              ctx.beginPath();
-              const waveX = smoothedTrail[i].x + Math.cos(angle + offset) * 10;
-              const waveY = smoothedTrail[i].y + Math.sin(angle + offset) * 10;
-              ctx.moveTo(smoothedTrail[i].x, smoothedTrail[i].y);
-              ctx.lineTo(waveX, waveY);
-              ctx.stroke();
-            }
-          }
-          break;
-
-        case 'fire':
-          // Fire effect
-          const hue = 15 + Math.random() * 30;
-          ctx.strokeStyle = `hsl(${hue}, 100%, ${50 + progress * 30}%)`;
-          ctx.lineWidth = 6 - progress * 3;
-          ctx.globalAlpha = 0.8;
-          
-          ctx.beginPath();
-          ctx.moveTo(smoothedTrail[i-1].x, smoothedTrail[i-1].y);
-          ctx.lineTo(smoothedTrail[i].x, smoothedTrail[i].y);
-          ctx.stroke();
-          
-          // Flame particles
-          if (Math.random() > 0.7) {
-            ctx.fillStyle = `hsl(${hue}, 100%, 60%)`;
-            ctx.globalAlpha = 0.6;
-            ctx.beginPath();
-            ctx.arc(smoothedTrail[i].x + (Math.random() - 0.5) * 10, 
-                   smoothedTrail[i].y - Math.random() * 15, 
-                   2 + Math.random() * 3, 0, Math.PI * 2);
-            ctx.fill();
-          }
-          break;
-
-        case 'water':
-          // Water droplet effect
-          ctx.strokeStyle = traceColor;
-          ctx.lineWidth = 4;
-          ctx.globalAlpha = 0.7;
-          
-          ctx.beginPath();
-          ctx.moveTo(smoothedTrail[i-1].x, smoothedTrail[i-1].y);
-          ctx.lineTo(smoothedTrail[i].x, smoothedTrail[i].y);
-          ctx.stroke();
-          
-          // Droplets
-          if (i % 5 === 0) {
-            ctx.fillStyle = traceColor;
-            ctx.globalAlpha = 0.4;
-            ctx.beginPath();
-            ctx.arc(smoothedTrail[i].x, smoothedTrail[i].y, 3, 0, Math.PI * 2);
-            ctx.fill();
-            
-            ctx.beginPath();
-            ctx.arc(smoothedTrail[i].x, smoothedTrail[i].y, 6, 0, Math.PI * 2);
-            ctx.strokeStyle = traceColor;
-            ctx.lineWidth = 1;
-            ctx.stroke();
-          }
-          break;
-      }
-    }
-
     ctx.globalAlpha = 1;
-  }, [traceEffect, traceColor, smoothTrajectory]);
+    ctx.shadowBlur = 0;
+  }, [smoothTrajectory]);
 
   const processFrame = useCallback(() => {
     if (!videoRef.current || !canvasRef.current) {
@@ -814,7 +600,60 @@ const GolfMacApp = () => {
         }
       }, 100);
 
-      // REMOVED MediaRecorder - it was causing crashes and memory issues
+      // Start MediaRecorder for playback - SIMPLE and isolated
+      recordedChunksRef.current = [];
+      if (streamRef.current) {
+        try {
+          let mimeType = 'video/webm';
+          if (MediaRecorder.isTypeSupported('video/webm;codecs=vp9')) {
+            mimeType = 'video/webm;codecs=vp9';
+          } else if (MediaRecorder.isTypeSupported('video/webm;codecs=vp8')) {
+            mimeType = 'video/webm;codecs=vp8';
+          } else if (MediaRecorder.isTypeSupported('video/mp4')) {
+            mimeType = 'video/mp4';
+          }
+          
+          const mediaRecorder = new MediaRecorder(streamRef.current, {
+            mimeType: mimeType,
+            videoBitsPerSecond: 4000000 // Lower bitrate for stability
+          });
+          
+          mediaRecorder.ondataavailable = (event) => {
+            if (event.data && event.data.size > 0) {
+              recordedChunksRef.current.push(event.data);
+            }
+          };
+
+          mediaRecorder.onstop = () => {
+            if (recordedChunksRef.current.length > 0) {
+              const blobType = mimeType.includes('mp4') ? 'video/mp4' : 'video/webm';
+              const blob = new Blob(recordedChunksRef.current, { type: blobType });
+              
+              // Store video with trail data
+              const videoData = {
+                id: Date.now(),
+                blob: blob,
+                trail: [...ballTrailRef.current], // Copy trail
+                timestamp: new Date().toLocaleTimeString(),
+                effect: traceEffect,
+                color: traceColor
+              };
+              
+              setRecordedVideos(prev => [videoData, ...prev]);
+            }
+          };
+
+          mediaRecorder.onerror = (event) => {
+            console.error('MediaRecorder error:', event.error);
+          };
+
+          // Start recording
+          mediaRecorder.start(500); // Get data every 500ms
+          mediaRecorderRef.current = mediaRecorder;
+        } catch (err) {
+          console.log('MediaRecorder error:', err);
+        }
+      }
 
       setIsRecording(true);
       setIsProcessing(true);
@@ -828,6 +667,16 @@ const GolfMacApp = () => {
     setIsRecording(false);
     setIsProcessing(false);
     setPreDetectionMode(false);
+    
+    // Stop MediaRecorder
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      try {
+        mediaRecorderRef.current.stop();
+        await new Promise(resolve => setTimeout(resolve, 300));
+      } catch (err) {
+        console.error('Error stopping MediaRecorder:', err);
+      }
+    }
     
     // Reset detection state
     baselineFrameRef.current = null;
@@ -860,90 +709,8 @@ const GolfMacApp = () => {
       cancelAnimationFrame(animationFrameRef.current);
     }
 
-    // Calculate shot data from trail with real GPS tracking
-    if (ballTrailRef.current.length > 3) {
-      const trail = ballTrailRef.current;
-      const startPoint = trail[0];
-      const endPoint = trail[trail.length - 1];
-      
-      const deltaX = endPoint.x - startPoint.x;
-      const deltaY = endPoint.y - startPoint.y;
-      const pixelDistance = Math.sqrt(deltaX * deltaX + deltaY * deltaY);
-      
-      // Estimate distance (rough conversion: 100 pixels ≈ 50 yards)
-      const estimatedDistance = Math.floor((pixelDistance / 100) * 50) + 100;
-      
-      // Determine shot shape (Slice/Draw/Hook)
-      let shotShape = 'Straight';
-      if (Math.abs(deltaX) > 30) {
-        if (deltaX > 0) {
-          shotShape = 'Slice'; // Ball curves right
-        } else {
-          shotShape = 'Hook'; // Ball curves left
-        }
-      }
-      
-      // Calculate direction in degrees (0 = north, 90 = east)
-      const angle = Math.atan2(deltaY, deltaX) * (180 / Math.PI);
-      const direction = (angle + 90 + 360) % 360; // Adjust to compass heading
-      
-      // Get current hole info
-      const currentHoleData = currentCourse.holes?.find(h => h.number === currentHole) || null;
-      
-      // Calculate real GPS landing position
-      const startGPS = userPosition; // Use current GPS position as start
-      const landingGPS = calculateLandingPosition(startGPS, estimatedDistance, direction);
-      
-      // Calculate distance to hole if hole data exists
-      let distanceToHole = null;
-      let recommendedClub = null;
-      if (currentHoleData && currentHoleData.lat !== 0 && currentHoleData.lng !== 0) {
-        distanceToHole = calculateDistance(
-          landingGPS.lat,
-          landingGPS.lng,
-          currentHoleData.lat,
-          currentHoleData.lng
-        );
-        recommendedClub = recommendClub(distanceToHole);
-      } else {
-        // If no hole data, recommend based on shot distance
-        recommendedClub = recommendClub(estimatedDistance);
-      }
-
-      const newShot = {
-        id: Date.now(),
-        distance: estimatedDistance,
-        direction: shotShape,
-        shotShape: shotShape,
-        effect: traceEffect,
-        color: traceColor,
-        timestamp: new Date().toLocaleTimeString(),
-        trailPoints: trail.length,
-        // Real GPS data
-        startLat: startGPS.lat,
-        startLng: startGPS.lng,
-        landingLat: landingGPS.lat,
-        landingLng: landingGPS.lng,
-        distanceToHole: distanceToHole,
-        recommendedClub: recommendedClub,
-        holeNumber: currentHole,
-        courseId: currentCourse.id
-      };
-      
-      setShots(prev => [newShot, ...prev]);
-    }
-
+    // Simple cleanup - no GPS calculations needed
     ballTrailRef.current = [];
-  };
-
-  const updateStreak = () => {
-    const newStreak = Math.max(0, golfStreak + 1);
-    setGolfStreak(newStreak);
-    try {
-      localStorage.setItem('golfStreak', newStreak.toString());
-    } catch (err) {
-      console.error('Failed to save streak to localStorage:', err);
-    }
   };
 
   // CRITICAL: Connect stream to video whenever recording starts
@@ -1133,439 +900,166 @@ const GolfMacApp = () => {
           )}
         </div>
 
-      {/* REMOVED playback feature - it was causing app crashes */}
-
-      {shots.length > 0 && (
-        <div className="mt-6">
-          <h3 className="text-lg font-bold mb-3 text-gray-800">Recent Shots</h3>
-          <div className="space-y-2">
-            {shots.slice(0, 3).map(shot => {
-              // Sanitize color to prevent XSS
-              const safeColor = /^#[0-9A-F]{6}$/i.test(shot.color) ? shot.color : '#00ff00';
-              return (
-                <div key={shot.id} className="bg-white rounded-lg p-4 shadow-md border-l-4" style={{ borderColor: safeColor }}>
-                  <div className="flex justify-between items-center">
-                    <div className="flex-1">
-                      <div className="text-2xl font-bold text-gray-800">{shot.distance} yds</div>
-                      <div className="text-sm text-gray-600">
-                        {shot.shotShape || shot.direction} • {shot.timestamp}
-                      </div>
-                      {shot.distanceToHole && (
-                        <div className="text-sm font-semibold text-green-600 mt-1">
-                          📍 {shot.distanceToHole} yds to hole
-                        </div>
-                      )}
-                      {shot.recommendedClub && (
-                        <div className="text-xs text-cyan-600 mt-1">
-                          ⛳ Club: {shot.recommendedClub}
-                        </div>
-                      )}
-                      {shot.holeNumber && (
-                        <div className="text-xs text-gray-500 mt-1">
-                          Hole {shot.holeNumber}
-                        </div>
-                      )}
-                    </div>
-                    <div className="text-right">
-                      <div className="text-xs text-gray-500">Effect</div>
-                      <div className="font-semibold" style={{ color: safeColor }}>{shot.effect}</div>
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
+      {/* REMOVED Recent Shots section - keeping it simple */}
     </div>
   );
   };
 
-  const GPSTab = () => {
-    // Filter shots for this course (or show all)
-    const courseShots = shots.filter(shot => shot.startLat && shot.startLng);
-    const currentHoleData = currentCourse.holes?.find(h => h.number === currentHole) || null;
-    const distanceToHoleFromPosition = currentHoleData && currentHoleData.lat !== 0 && currentHoleData.lng !== 0
-      ? calculateDistance(userPosition.lat, userPosition.lng, currentHoleData.lat, currentHoleData.lng)
-      : null;
-    const recommendedClubForHole = distanceToHoleFromPosition ? recommendClub(distanceToHoleFromPosition) : null;
-    
+  // REMOVED GPSTab - keeping it simple
+
+  // VideoPlayer component - isolated for each video
+  const VideoPlayer = ({ video, isSelected, onToggle }) => {
+    const playbackCanvasRef = useRef(null);
+    const playbackVideoRef = useRef(null);
+    const [videoUrl, setVideoUrl] = useState(null);
+
+    // Create/cleanup video URL
+    useEffect(() => {
+      if (isSelected && !videoUrl) {
+        const url = URL.createObjectURL(video.blob);
+        setVideoUrl(url);
+      }
+      return () => {
+        if (videoUrl) {
+          URL.revokeObjectURL(videoUrl);
+        }
+      };
+    }, [isSelected, video.blob, videoUrl]);
+
+    // Draw ball trail on playback video
+    useEffect(() => {
+      if (!isSelected || !playbackCanvasRef.current || !playbackVideoRef.current || !videoUrl) return;
+
+      const canvas = playbackCanvasRef.current;
+      const videoEl = playbackVideoRef.current;
+      const ctx = canvas.getContext('2d');
+
+      const drawTrail = () => {
+        if (!videoEl.videoWidth || !videoEl.videoHeight) return;
+
+        // Match canvas to video size
+        if (canvas.width !== videoEl.videoWidth || canvas.height !== videoEl.videoHeight) {
+          canvas.width = videoEl.videoWidth;
+          canvas.height = videoEl.videoHeight;
+        }
+
+        // Clear canvas
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        // Draw ball trail if we have one
+        if (video.trail && video.trail.length > 1) {
+          ctx.strokeStyle = video.color || '#ff0000';
+          ctx.lineWidth = 8;
+          ctx.lineCap = 'round';
+          ctx.lineJoin = 'round';
+          ctx.shadowBlur = 20;
+          ctx.shadowColor = video.color || '#ff0000';
+
+          ctx.beginPath();
+          ctx.moveTo(video.trail[0].x, video.trail[0].y);
+          for (let i = 1; i < video.trail.length; i++) {
+            ctx.lineTo(video.trail[i].x, video.trail[i].y);
+          }
+          ctx.stroke();
+          ctx.shadowBlur = 0;
+
+          // Draw yellow inner line
+          ctx.strokeStyle = '#ffff00';
+          ctx.lineWidth = 3;
+          ctx.beginPath();
+          ctx.moveTo(video.trail[0].x, video.trail[0].y);
+          for (let i = 1; i < video.trail.length; i++) {
+            ctx.lineTo(video.trail[i].x, video.trail[i].y);
+          }
+          ctx.stroke();
+        }
+      };
+
+      videoEl.addEventListener('timeupdate', drawTrail);
+      drawTrail();
+
+      return () => {
+        videoEl.removeEventListener('timeupdate', drawTrail);
+      };
+    }, [isSelected, videoUrl, video.trail, video.color]);
+
     return (
-      <div>
-        <div className="mb-4 grid grid-cols-2 gap-3">
-          <div>
-            <label className="block text-sm font-semibold text-gray-700 mb-2">Select Course</label>
-            <select
-              value={currentCourse.id}
-              onChange={(e) => {
-                const selectedCourse = courses.find(c => c.id === parseInt(e.target.value));
-                setCurrentCourse(selectedCourse);
-                setCurrentHole(1); // Reset to hole 1 when course changes
+      <div className="bg-white rounded-lg shadow-lg overflow-hidden border-2 border-gray-200">
+        <div className="p-4 bg-gradient-to-r from-gray-800 to-black text-white">
+          <div className="flex justify-between items-center">
+            <div>
+              <div className="font-bold">{video.timestamp}</div>
+              <div className="text-sm opacity-80">{video.trail.length} trail points</div>
+            </div>
+            <button
+              onClick={onToggle}
+              className="bg-cyan-500 hover:bg-cyan-600 px-4 py-2 rounded-lg font-semibold"
+            >
+              {isSelected ? 'Hide' : 'Play'}
+            </button>
+          </div>
+        </div>
+
+        {isSelected && videoUrl && (
+          <div className="relative bg-black">
+            <video
+              ref={playbackVideoRef}
+              src={videoUrl}
+              controls
+              playsInline
+              webkit-playsinline="true"
+              className="w-full"
+              style={{ maxHeight: '70vh', display: 'block' }}
+              onLoadedMetadata={() => {
+                if (playbackVideoRef.current) {
+                  playbackVideoRef.current.play().catch(() => {});
+                }
               }}
-              className="w-full p-3 border-2 border-gray-300 rounded-lg focus:border-cyan-500 focus:outline-none bg-white"
-            >
-              {courses.map(course => (
-                <option key={course.id} value={course.id}>{course.name}</option>
-              ))}
-            </select>
-          </div>
-          
-          <div>
-            <label className="block text-sm font-semibold text-gray-700 mb-2">Current Hole</label>
-            <select
-              value={currentHole}
-              onChange={(e) => setCurrentHole(parseInt(e.target.value))}
-              className="w-full p-3 border-2 border-gray-300 rounded-lg focus:border-cyan-500 focus:outline-none bg-white"
-            >
-              {currentCourse.holes?.map(hole => (
-                <option key={hole.number} value={hole.number}>
-                  Hole {hole.number} - Par {hole.par} ({hole.yardage} yds)
-                </option>
-              ))}
-            </select>
-          </div>
-        </div>
-
-        {/* Distance to Hole and Club Recommendation */}
-        {distanceToHoleFromPosition && (
-          <div className="mb-4 grid grid-cols-2 gap-3">
-            <div className="bg-gradient-to-r from-orange-400 to-red-500 text-black rounded-lg p-4 shadow-lg">
-              <div className="text-xs font-semibold opacity-90 mb-1">Distance to Hole</div>
-              <div className="text-2xl font-bold">{distanceToHoleFromPosition} yds</div>
-              {currentHoleData && (
-                <div className="text-xs mt-1 opacity-80">
-                  Hole {currentHole} • Par {currentHoleData.par}
-                </div>
-              )}
-            </div>
-            {recommendedClubForHole && (
-              <div className="bg-gradient-to-r from-pink-500 to-cyan-500 text-black rounded-lg p-4 shadow-lg">
-                <div className="text-xs font-semibold opacity-90 mb-1">Recommended Club</div>
-                <div className="text-2xl font-bold">{recommendedClubForHole}</div>
-                <div className="text-xs mt-1 opacity-80">For this distance</div>
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* Shot Feedback Summary */}
-        {courseShots.length > 0 && (
-          <div className="mb-4 grid grid-cols-3 gap-2">
-            {['Slice', 'Hook', 'Draw'].map((shape) => {
-              const count = courseShots.filter(s => s.shotShape === shape).length;
-              const colors = {
-                'Slice': 'from-orange-400 to-red-500',
-                'Hook': 'from-red-400 to-pink-500',
-                'Draw': 'from-green-400 to-emerald-500'
-              };
-              return (
-                <div key={shape} className={`bg-gradient-to-r ${colors[shape]} text-white rounded-lg p-3 text-center`}>
-                  <div className="text-2xl font-bold">{count}</div>
-                  <div className="text-xs font-semibold">{shape}</div>
-                </div>
-              );
-            })}
-          </div>
-        )}
-
-        <div className="bg-gradient-to-br from-green-300 to-cyan-300 rounded-lg p-6 h-96 relative overflow-hidden border-2 border-green-400 shadow-xl">
-          {/* Aerial view background pattern */}
-          <div className="absolute inset-0 opacity-30">
-            <svg className="w-full h-full">
-              {/* Grid pattern for aerial view */}
-              <defs>
-                <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
-                  <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#10b981" strokeWidth="1" opacity="0.3"/>
-                </pattern>
-              </defs>
-              <rect width="100%" height="100%" fill="url(#grid)" />
-            </svg>
-          </div>
-
-          <div className="relative h-full">
-            <div className="flex items-center gap-2 mb-4">
-              <MapPin className="w-6 h-6 text-green-600" />
-              <h3 className="text-xl font-bold text-gray-800">{currentCourse.name}</h3>
-            </div>
-
-            {/* Flight paths and landing positions */}
-            <div className="absolute inset-0" style={{ marginTop: '60px', marginLeft: '20px', marginRight: '20px', marginBottom: '80px' }}>
-              <svg width="100%" height="100%" className="absolute inset-0">
-                {courseShots.slice(0, 5).map((shot, index) => {
-                  if (!shot.landingLat || !shot.landingLng) return null;
-                  
-                  // Convert lat/lng to screen coordinates (simplified projection)
-                  const scale = 10000; // Scale factor for visualization
-                  const startX = 50 + (shot.startLng - userPosition.lng) * scale * 10;
-                  const startY = 50 + (userPosition.lat - shot.startLat) * scale * 10;
-                  const endX = 50 + (shot.landingLng - userPosition.lng) * scale * 10;
-                  const endY = 50 + (userPosition.lat - shot.landingLat) * scale * 10;
-                  
-                  const isSlice = shot.shotShape === 'Slice';
-                  const isHook = shot.shotShape === 'Hook';
-                  const isDraw = shot.shotShape === 'Draw';
-                  
-                  return (
-                    <g key={shot.id}>
-                      {/* Flight path curve */}
-                      <path
-                        d={`M ${startX} ${startY} Q ${startX + (endX - startX) / 2 + (isSlice ? 30 : isHook ? -30 : 0)} ${startY - 40} ${endX} ${endY}`}
-                        stroke={shot.color || '#00ff00'}
-                        strokeWidth="3"
-                        fill="none"
-                        opacity="0.6"
-                        strokeDasharray="5,5"
-                      />
-                      {/* Landing position marker */}
-                      <circle
-                        cx={endX}
-                        cy={endY}
-                        r="8"
-                        fill={isSlice ? '#ff6600' : isHook ? '#ff0066' : isDraw ? '#00ff00' : shot.color || '#00ff00'}
-                        stroke="white"
-                        strokeWidth="2"
-                      />
-                      <circle
-                        cx={endX}
-                        cy={endY}
-                        r="12"
-                        fill={isSlice ? '#ff6600' : isHook ? '#ff0066' : isDraw ? '#00ff00' : shot.color || '#00ff00'}
-                        opacity="0.3"
-                      />
-                    </g>
-                  );
-                })}
-                
-                {/* Your position marker */}
-                <circle cx="50" cy="50" r="10" fill="#00bfff" stroke="white" strokeWidth="3" />
-                <circle cx="50" cy="50" r="15" fill="#00bfff" opacity="0.3" />
-              </svg>
-            </div>
-
-            <div className="absolute bottom-4 left-4 bg-white/90 backdrop-blur-sm rounded-lg p-3 shadow-lg">
-              <div className="text-xs text-gray-600 mb-1">Your Position</div>
-              <div className="font-mono text-xs text-gray-800 font-semibold">
-                {userPosition.lat.toFixed(4)}°N, {userPosition.lng.toFixed(4)}°W
-              </div>
-            </div>
-
-            <div className="absolute top-20 right-4 bg-white/90 backdrop-blur-sm rounded-full px-3 py-1 shadow-lg">
-              <div className="text-xs font-semibold text-gray-700">
-                Hole 7 • Par 4
-              </div>
-            </div>
-
-            {/* Legend */}
-            {courseShots.length > 0 && (
-              <div className="absolute bottom-4 right-4 bg-white/90 backdrop-blur-sm rounded-lg p-2 shadow-lg">
-                <div className="text-xs font-semibold text-gray-700 mb-2">Shot Types</div>
-                <div className="space-y-1">
-                  <div className="flex items-center gap-2">
-                    <div className="w-3 h-3 rounded-full bg-orange-500"></div>
-                    <span className="text-xs text-gray-600">Slice</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <div className="w-3 h-3 rounded-full bg-pink-500"></div>
-                    <span className="text-xs text-gray-600">Hook</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <div className="w-3 h-3 rounded-full bg-green-500"></div>
-                    <span className="text-xs text-gray-600">Draw/Straight</span>
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
-
-        {/* Shot Details */}
-        {courseShots.length > 0 && (
-          <div className="mt-4 space-y-2">
-            <h4 className="font-bold text-gray-800">Recent Shots on Course</h4>
-            {courseShots.slice(0, 3).map(shot => (
-              <div key={shot.id} className="bg-white rounded-lg p-3 shadow-md border-l-4" style={{ borderColor: shot.color }}>
-                <div className="flex justify-between items-center">
-                  <div>
-                    <div className="font-bold text-gray-800">{shot.distance} yds</div>
-                    <div className="text-sm text-gray-600">
-                      <span className={`font-semibold ${
-                        shot.shotShape === 'Slice' ? 'text-orange-600' :
-                        shot.shotShape === 'Hook' ? 'text-pink-600' :
-                        shot.shotShape === 'Draw' ? 'text-green-600' :
-                        'text-gray-600'
-                      }`}>
-                        {shot.shotShape || 'Straight'}
-                      </span>
-                      {' • '}{shot.timestamp}
-                    </div>
-                  </div>
-                  <Target className="w-5 h-5" style={{ color: shot.color }} />
-                </div>
-              </div>
-            ))}
+            />
+            <canvas
+              ref={playbackCanvasRef}
+              className="absolute top-0 left-0 w-full h-full pointer-events-none"
+              style={{ maxHeight: '70vh' }}
+            />
           </div>
         )}
       </div>
     );
   };
 
-  const CalendarTab = () => {
-    const today = new Date();
-    const daysInMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0).getDate();
-    const firstDay = new Date(today.getFullYear(), today.getMonth(), 1).getDay();
-    
+  // PlaybackTab - COMPLETELY SEPARATE from camera
+  const PlaybackTab = () => {
+    const [selectedVideoId, setSelectedVideoId] = useState(null);
+
+    if (recordedVideos.length === 0) {
+      return (
+        <div className="text-center py-12">
+          <Play className="w-16 h-16 mx-auto text-gray-400 mb-4" />
+          <p className="text-gray-600 text-lg">No recordings yet</p>
+          <p className="text-gray-500 text-sm mt-2">Record a shot to see it here</p>
+        </div>
+      );
+    }
+
     return (
-      <div>
-        <div className="bg-gradient-to-r from-orange-500 via-red-500 to-pink-500 rounded-lg p-6 mb-6 text-black shadow-xl">
-          <div className="text-center">
-            <div className="text-5xl font-bold mb-2">{golfStreak}</div>
-            <div className="text-lg opacity-90">Day Streak 🔥</div>
-          </div>
-        </div>
-
-        <button
-          onClick={updateStreak}
-          className="w-full bg-gradient-to-r from-orange-500 to-red-500 hover:from-orange-600 hover:to-red-600 text-black font-bold py-3 rounded-lg mb-6 transition-all shadow-lg"
-        >
-          Mark Today as Golfed ✓
-        </button>
-
-        <div className="bg-gradient-to-br from-orange-50 to-pink-50 rounded-lg p-4 shadow-lg border-2 border-orange-200">
-          <div className="text-center font-bold text-gray-800 mb-4">
-            {today.toLocaleString('default', { month: 'long', year: 'numeric' })}
-          </div>
-          <div className="grid grid-cols-7 gap-2">
-            {['S', 'M', 'T', 'W', 'T', 'F', 'S'].map((day, i) => (
-              <div key={i} className="text-center text-xs font-semibold text-gray-600 pb-2">
-                {day}
-              </div>
-            ))}
-            {[...Array(firstDay)].map((_, i) => (
-              <div key={`empty-${i}`} />
-            ))}
-            {[...Array(daysInMonth)].map((_, i) => {
-              const day = i + 1;
-              const isToday = day === today.getDate();
-              const isGolfDay = day <= today.getDate() && day > today.getDate() - golfStreak;
-              
-              return (
-                <div
-                  key={day}
-                  className={`aspect-square flex items-center justify-center rounded-lg text-sm font-medium ${
-                    isToday
-                      ? 'bg-gradient-to-br from-orange-500 via-red-500 to-pink-500 text-black ring-2 ring-orange-300 ring-offset-2 font-bold'
-                      : isGolfDay
-                      ? 'bg-gradient-to-br from-orange-300 to-pink-300 text-orange-900 font-semibold'
-                      : 'text-gray-700'
-                  }`}
-                >
-                  {day}
-                </div>
-              );
-            })}
-          </div>
+      <div className="space-y-6">
+        <h2 className="text-2xl font-bold text-gray-800 mb-4">Your Recordings</h2>
+        
+        <div className="grid grid-cols-1 gap-4">
+          {recordedVideos.map(video => (
+            <VideoPlayer
+              key={video.id}
+              video={video}
+              isSelected={selectedVideoId === video.id}
+              onToggle={() => setSelectedVideoId(selectedVideoId === video.id ? null : video.id)}
+            />
+          ))}
         </div>
       </div>
     );
   };
 
-  const SettingsTab = () => (
-    <div className="space-y-6">
-      <div>
-        <h3 className="text-lg font-bold mb-3 text-gray-800">Ball Flight Effect</h3>
-        <div className="grid grid-cols-2 gap-3">
-          {effects.map(effect => {
-            const Icon = effect.icon;
-            return (
-              <button
-                key={effect.id}
-                onClick={() => {
-                  setTraceEffect(effect.id);
-                  setTraceColor(effect.color);
-                }}
-                className={`p-4 rounded-lg border-2 transition-all ${
-                  traceEffect === effect.id
-                    ? 'border-cyan-500 bg-cyan-50'
-                    : 'border-gray-200 hover:border-gray-300'
-                }`}
-              >
-                <Icon className="w-8 h-8 mx-auto mb-2" style={{ color: effect.color }} />
-                <div className="font-semibold text-gray-800">{effect.name}</div>
-              </button>
-            );
-          })}
-        </div>
-      </div>
-
-      <div>
-        <h3 className="text-lg font-bold mb-3 text-gray-800">Custom Trace Color</h3>
-        <div className="flex items-center gap-4">
-          <input
-            type="color"
-            value={traceColor}
-            onChange={(e) => {
-              const color = e.target.value;
-              // Validate hex color format
-              if (/^#[0-9A-F]{6}$/i.test(color)) {
-                setTraceColor(color);
-              }
-            }}
-            className="w-20 h-20 rounded-lg cursor-pointer border-2 border-gray-300"
-          />
-          <div>
-            <div className="text-sm text-gray-600">Selected Color</div>
-            <div className="font-mono text-sm font-semibold" style={{ color: traceColor }}>
-              {traceColor}
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <div>
-        <h3 className="text-lg font-bold mb-3 text-gray-800">Detection Sensitivity</h3>
-        <input
-          type="range"
-          min="0.3"
-          max="1"
-          step="0.1"
-          value={detectionSensitivity}
-          onChange={(e) => {
-            const value = parseFloat(e.target.value);
-            // Validate range
-            if (!isNaN(value) && value >= 0.3 && value <= 1) {
-              setDetectionSensitivity(value);
-            }
-          }}
-          className="w-full"
-        />
-        <div className="flex justify-between text-xs text-gray-600 mt-1">
-          <span>Low</span>
-          <span className="font-semibold">{(detectionSensitivity * 100).toFixed(0)}%</span>
-          <span>High</span>
-        </div>
-        <p className="text-xs text-gray-500 mt-2">
-          Higher sensitivity detects more motion, lower reduces false positives
-        </p>
-      </div>
-
-      <div className="bg-blue-50 border-2 border-blue-200 rounded-lg p-4">
-        <div className="font-semibold text-blue-900 mb-2">🤖 Ball Detection</div>
-        <div className="text-sm text-blue-800 space-y-1">
-          <p>• Real-time motion detection algorithm</p>
-          <p>• Automatic ball tracking and tracing</p>
-          <p>• Color filtering for white golf balls</p>
-          <p>• Smooth trail rendering with effects</p>
-        </div>
-      </div>
-
-      <div className="bg-green-50 border-2 border-green-200 rounded-lg p-4">
-        <div className="font-semibold text-green-900 mb-2">📱 Demo Version</div>
-        <div className="text-sm text-green-800">
-          This free demo uses pure JavaScript computer vision algorithms (motion detection + color filtering) for ball tracking. Works offline without external ML libraries!
-        </div>
-      </div>
-    </div>
-  );
+  // REMOVED CalendarTab and SettingsTab - keeping it simple
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-emerald-50 via-cyan-50 to-teal-50">
@@ -1585,8 +1079,6 @@ const GolfMacApp = () => {
               </h1>
               <div className="flex items-center gap-3 mt-2">
                 <Target className="w-6 h-6 text-orange-500 animate-bounce" />
-                <Navigation className="w-6 h-6 text-red-500 animate-bounce" style={{ animationDelay: '0.2s' }} />
-                <Flame className="w-6 h-6 text-cyan-500 animate-bounce" style={{ animationDelay: '0.4s' }} />
               </div>
             </div>
             <div className="flex items-center justify-center gap-2">
@@ -1594,22 +1086,14 @@ const GolfMacApp = () => {
               <p className="text-lg font-semibold bg-gradient-to-r from-orange-500 to-red-500 bg-clip-text text-transparent">Shot Tracker</p>
               <TrendingUp className="w-5 h-5 text-red-500" />
             </div>
-            {shots.length > 0 && (
-              <div className="mt-4 inline-flex items-center gap-2 bg-gradient-to-r from-orange-500 via-red-500 to-pink-500 text-black px-4 py-2 rounded-full shadow-xl">
-                <Target className="w-4 h-4" />
-                <span className="font-bold text-sm">{shots.length} Shot{shots.length !== 1 ? 's' : ''} Tracked</span>
-              </div>
-            )}
           </div>
         </div>
 
-        {/* Navigation */}
+        {/* Navigation - SIMPLE: Just Record and Playback */}
         <div className="bg-gradient-to-r from-orange-100 via-pink-100 to-cyan-100 rounded-xl shadow-xl p-2 mb-6 flex gap-2 border-2 border-orange-200">
           {[
             { id: 'record', icon: Camera, label: 'Record' },
-            { id: 'gps', icon: MapPin, label: 'GPS' },
-            { id: 'calendar', icon: Calendar, label: 'Calendar' },
-            { id: 'settings', icon: Settings, label: 'Settings' }
+            { id: 'playback', icon: Play, label: 'Playback' }
           ].map(tab => {
             const Icon = tab.icon;
             return (
@@ -1632,9 +1116,7 @@ const GolfMacApp = () => {
         {/* Content */}
         <div className="bg-gradient-to-br from-orange-50 via-pink-50 to-cyan-50 rounded-xl shadow-2xl p-6 border-2 border-orange-200">
           {activeTab === 'record' && <RecordTab />}
-          {activeTab === 'gps' && <GPSTab />}
-          {activeTab === 'calendar' && <CalendarTab />}
-          {activeTab === 'settings' && <SettingsTab />}
+          {activeTab === 'playback' && <PlaybackTab />}
         </div>
       </div>
     </div>
