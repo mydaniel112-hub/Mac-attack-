@@ -1061,6 +1061,17 @@ const GolfMacApp = () => {
 
   // REMOVED CalendarTab and SettingsTab - keeping it simple
 
+  // Ensure component always returns something
+  if (!modelLoaded) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-emerald-50 via-cyan-50 to-teal-50 flex items-center justify-center">
+        <div className="text-center">
+          <h1 className="text-2xl font-bold text-gray-800">Loading Golf Mac...</h1>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-emerald-50 via-cyan-50 to-teal-50">
       <div className="max-w-2xl mx-auto p-4">
