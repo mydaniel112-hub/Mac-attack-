@@ -389,12 +389,13 @@ const GolfBallTracker = () => {
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-900 to-black text-white">
       <div className="max-w-4xl mx-auto p-4">
-        {/* Header */}
+        {/* Header - GOLF MAC BRANDING */}
         <div className="text-center mb-6 pt-4">
-          <h1 className="text-4xl font-black mb-2 bg-gradient-to-r from-red-500 to-yellow-500 bg-clip-text text-transparent">
-            GOLF BALL TRACKER
+          <h1 className="text-6xl font-black mb-2 bg-gradient-to-r from-red-500 via-orange-500 to-yellow-500 bg-clip-text text-transparent animate-pulse">
+            GOLF MAC
           </h1>
-          <p className="text-gray-400">ML-Enhanced Ball Detection & Trajectory Tracking</p>
+          <p className="text-xl font-bold text-gray-300 mb-1">GOLF MAC</p>
+          <p className="text-gray-400">Ball Detection & Trajectory Tracking</p>
         </div>
 
         {/* Recording View */}
@@ -419,7 +420,7 @@ const GolfBallTracker = () => {
                   className="px-8 py-4 bg-red-600 hover:bg-red-700 rounded-full font-bold text-lg flex items-center gap-2"
                 >
                   <Camera className="w-6 h-6" />
-                  Start Recording
+                  GOLF MAC - Start Recording
                 </button>
               ) : (
                 <button
@@ -427,7 +428,7 @@ const GolfBallTracker = () => {
                   className="px-8 py-4 bg-red-600 hover:bg-red-700 rounded-full font-bold text-lg flex items-center gap-2"
                 >
                   <Square className="w-6 h-6" />
-                  Stop Recording
+                  GOLF MAC - Stop Recording
                 </button>
               )}
             </div>
@@ -436,7 +437,7 @@ const GolfBallTracker = () => {
               <div className="text-center">
                 <div className="inline-flex items-center gap-2 bg-red-600 px-4 py-2 rounded-full">
                   <div className="w-3 h-3 bg-white rounded-full animate-pulse"></div>
-                  <span className="font-bold">RECORDING</span>
+                  <span className="font-bold">GOLF MAC - RECORDING</span>
                 </div>
               </div>
             )}
@@ -446,8 +447,13 @@ const GolfBallTracker = () => {
         {/* Processing View */}
         {isProcessing && (
           <div className="text-center py-12">
+            <div className="mb-4">
+              <h2 className="text-3xl font-black bg-gradient-to-r from-red-500 to-yellow-500 bg-clip-text text-transparent mb-2">
+                GOLF MAC
+              </h2>
+            </div>
             <div className="inline-block animate-spin rounded-full h-16 w-16 border-4 border-white border-t-transparent mb-4"></div>
-            <p className="text-xl font-semibold">Processing video...</p>
+            <p className="text-xl font-semibold">GOLF MAC Processing...</p>
             <p className="text-gray-400 mt-2">Detecting ball trajectory ({trajectoryRef.current.length} points found)</p>
           </div>
         )}
@@ -455,7 +461,16 @@ const GolfBallTracker = () => {
         {/* Playback View */}
         {recordedVideo && !isProcessing && (
           <div className="space-y-4">
-            <div className="relative bg-black rounded-lg overflow-hidden">
+            <div className="text-center mb-2">
+              <h2 className="text-3xl font-black bg-gradient-to-r from-red-500 to-yellow-500 bg-clip-text text-transparent">
+                GOLF MAC Playback
+              </h2>
+              <p className="text-gray-400 text-sm mt-1">GOLF MAC Trajectory Analysis</p>
+            </div>
+            <div className="relative bg-black rounded-lg overflow-hidden border-4 border-red-500">
+              <div className="absolute top-2 left-2 z-10 bg-red-600 px-3 py-1 rounded-lg">
+                <span className="font-black text-white text-sm">GOLF MAC</span>
+              </div>
               <video
                 ref={playbackVideoRef}
                 src={recordedVideo}
@@ -474,11 +489,14 @@ const GolfBallTracker = () => {
               />
             </div>
 
-            <div className="bg-gray-800 rounded-lg p-4">
+            <div className="bg-gradient-to-r from-gray-800 to-gray-900 rounded-lg p-4 border-2 border-red-500">
               <div className="flex justify-between items-center">
                 <div>
-                  <p className="text-sm text-gray-400">Trajectory Points</p>
-                  <p className="text-2xl font-bold">{ballTrajectory.length}</p>
+                  <p className="text-lg font-black bg-gradient-to-r from-red-500 to-yellow-500 bg-clip-text text-transparent mb-1">
+                    GOLF MAC
+                  </p>
+                  <p className="text-sm text-gray-400">Trajectory Points Detected</p>
+                  <p className="text-3xl font-bold text-red-500">{ballTrajectory.length}</p>
                 </div>
                 <button
                   onClick={() => {
@@ -487,9 +505,9 @@ const GolfBallTracker = () => {
                     trajectoryRef.current = [];
                     startCamera();
                   }}
-                  className="px-6 py-3 bg-blue-600 hover:bg-blue-700 rounded-lg font-semibold"
+                  className="px-6 py-3 bg-gradient-to-r from-red-600 to-orange-600 hover:from-red-700 hover:to-orange-700 rounded-lg font-bold text-white"
                 >
-                  Record New Shot
+                  GOLF MAC - New Shot
                 </button>
               </div>
             </div>

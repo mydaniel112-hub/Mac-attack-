@@ -1,7 +1,7 @@
 {
   "name": "golf-mac-app",
   "version": "1.0.0",
-  "description": "Golf Shot Tracker",
+  "description": "GOLF MAC - Golf Ball Tracker",
   "private": true,
   "type": "module",
   "scripts": {
