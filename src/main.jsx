@@ -1,6 +1,6 @@
 import React from 'react'
 import ReactDOM from 'react-dom/client'
-import GolfMacApp from './GolfMacApp.jsx'
+import GolfBallTracker from './GolfBallTracker.jsx'
 import './index.css'
 
 // Error boundary wrapper
@@ -36,7 +36,7 @@ class ErrorBoundary extends React.Component {
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
     <ErrorBoundary>
-      <GolfMacApp />
+      <GolfBallTracker />
     </ErrorBoundary>
   </React.StrictMode>,
 )
